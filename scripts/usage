@@ -269,13 +269,8 @@ def codex_last_snapshot():
     return None, None, None
 
 
-def norm_codex(rl, camel):
-    """Normalise either the app-server (camelCase) or session-log (snake_case) rate-limit object."""
-    def g(obj, camel_key, snake_key):
-        if not isinstance(obj, dict):
-            return None
-        return obj.get(camel_key if camel else snake_key)
-
+def bucket_windows(rl, g, prefix="codex", suffix=""):
+    """The primary/secondary windows of one Codex limit bucket."""
     windows = []
     for key, label in (("primary", "primary (short)"), ("secondary", "secondary (weekly)")):
         w = rl.get(key)
@@ -285,8 +280,37 @@ def norm_codex(rl, camel):
             lab = label
             if mins:
                 lab = f"{int(mins/60)}-hour" if mins < 1440 * 2 else f"{round(mins/1440)}-day"
-            windows.append(window(f"codex_{key}", lab, g(w, "usedPercent", "used_percent"),
+            windows.append(window(f"{prefix}_{key}", lab + suffix, g(w, "usedPercent", "used_percent"),
                                   parse_ts(g(w, "resetsAt", "resets_at")), dur))
+    return windows
+
+
+def norm_codex(rl, camel, by_id=None, ordinary_allowed=None, reset_credits=None):
+    """Normalise either the app-server (camelCase) or session-log (snake_case) rate-limit object.
+
+    by_id, ordinary_allowed and reset_credits come only from the app-server response.
+    """
+    def g(obj, camel_key, snake_key):
+        if not isinstance(obj, dict):
+            return None
+        return obj.get(camel_key if camel else snake_key)
+
+    windows = bucket_windows(rl, g)
+    # Plus/Pro accounts can carry extra per-model buckets beside the default one. They are
+    # reported, but only the default bucket sets the level: a spent model bucket leaves the rest usable.
+    default_id = g(rl, "limitId", "limit_id")
+    extra_windows, bucket_notes = [], []
+    for bid, b in (by_id or {}).items():
+        if not isinstance(b, dict) or bid == default_id:
+            continue
+        name = g(b, "limitName", "limit_name") or bid
+        bw = bucket_windows(b, g, prefix=f"codex_{bid}", suffix=f" ({name})")
+        for w in bw:
+            w["bucket"] = bid
+        extra_windows += bw
+        lvl = level_for(bw, bool(g(b, "rateLimitReachedType", "rate_limit_reached_type")))
+        if lvl in ("yellow", "red"):
+            bucket_notes.append(f"bucket '{name}' is {lvl}; models limited by it may be unavailable")
     il = g(rl, "individualLimit", "individual_limit")
     individual = None
     if isinstance(il, dict):
@@ -302,19 +326,31 @@ def norm_codex(rl, camel):
         windows.append(window("codex_individual", "individual limit", pct, resets, 30 * 86400,
                               extra={"pace_basis": "estimated 30-day window ending at reset"}))
     credits = rl.get("credits") or {}
+    has_credits = g(credits, "hasCredits", "has_credits")
     reached = g(rl, "rateLimitReachedType", "rate_limit_reached_type")
     spend_stop = bool(g(rl, "spendControlReached", "spend_control_reached"))
-    hard_stop = bool(reached) or spend_stop or (credits and credits.get("has_credits") is False and not windows)
+    hard_stop = (bool(reached) or spend_stop or ordinary_allowed is False
+                 or (bool(credits) and has_credits is False and not windows))
+    resets = None
+    if isinstance(reset_credits, dict):
+        avail = [c for c in reset_credits.get("credits") or [] if c.get("status") == "available"]
+        exp = sorted(t for t in (parse_ts(c.get("expiresAt")) for c in avail) if t)
+        resets = {"available": reset_credits.get("availableCount", len(avail)),
+                  "next_expires_at": iso(exp[0]) if exp else None}
+    level, bind = level_for(windows, hard_stop), binding(windows)
     return {
         "plan": g(rl, "planType", "plan_type"),
-        "windows": windows,
+        "windows": windows + extra_windows,
+        "bucket_notes": bucket_notes,
         "individual_limit": individual,
-        "credits": {"has_credits": g(credits, "hasCredits", "has_credits"), "unlimited": credits.get("unlimited"),
+        "credits": {"has_credits": has_credits, "unlimited": credits.get("unlimited"),
                     "balance": (lambda b: float(b) if b not in (None, "") else None)(credits.get("balance"))} if credits else None,
         "rate_limit_reached_type": reached,
         "spend_control_reached": spend_stop,
-        "binding": binding(windows),
-        "level": level_for(windows, hard_stop),
+        "ordinary_usage_allowed": ordinary_allowed,
+        "reset_credits": resets,
+        "binding": bind,
+        "level": level,
     }
 
 
@@ -323,7 +359,12 @@ def read_codex():
     try:
         res = codex_rpc_rate_limits()
         rl = res.get("rateLimits") or {}
-        out.update(norm_codex(rl, camel=True))
+        out.update(norm_codex(rl, camel=True, by_id=res.get("rateLimitsByLimitId"),
+                              ordinary_allowed=res.get("ordinaryUsageAllowed"),
+                              reset_credits=res.get("rateLimitResetCredits")))
+        out["notes"] += out.pop("bucket_notes")
+        if res.get("ordinaryUsageAllowed") is False:
+            out["notes"].append("Codex reports ordinary usage not allowed")
         out["source"] = "app-server account/rateLimits/read"
         out["status"] = "ok"
         return out
@@ -332,6 +373,7 @@ def read_codex():
     rl, ts, path = codex_last_snapshot()
     if rl:
         out.update(norm_codex(rl, camel=False))
+        out.pop("bucket_notes")
         out["source"] = f"stale session log {os.path.basename(path)}"
         out["status"] = "stale"
         out["snapshot_at"] = ts
@@ -352,13 +394,23 @@ def advise(vendors):
     lx = x.get("level") if x and x["status"] in ("ok", "stale") else None
     notes = []
     for v, lvl in (("claude", lc), ("codex", lx)):
-        vd = vendors.get(v) or {}
+        if v not in vendors:
+            continue
+        vd = vendors[v]
         b = vd.get("binding")
         if lvl is None:
             notes.append(f"{v}: quota unknown ({'; '.join(vd.get('notes') or ['not read'])}); treat as yellow")
         elif b:
             pace = next((w.get("pace") for w in vd.get("windows", []) if w["id"] == b["id"]), "n/a")
             notes.append(f"{v}: {lvl}; binding window '{b['label']}' at {b['percent']}% used, resets in {b['resets_in']}, pace {pace}")
+    if len(vendors) == 1:  # --vendor: the other side was not read, so no cross-vendor preference
+        (v, vd), = vendors.items()
+        lvl = vd.get("level") if vd["status"] in ("ok", "stale") else None
+        rule = {"red": f"{v} red: launch no new work on it",
+                "yellow": f"{v} yellow: prefer the other vendor where the table allows",
+                "green": f"{v} green"}.get(lvl, f"{v} quota unknown: treat as yellow")
+        return {v: lvl or "unknown", "prefer": "n/a",
+                "rule": rule + "; run without --vendor for a routing preference", "notes": notes}
     rc, rx = LEVEL_RANK[lc], LEVEL_RANK[lx]
     if lc == "red" and lx == "red":
         prefer, rule = "neither", "both vendors red: stop launching new work and tell the user"
@@ -387,10 +439,14 @@ def text_report(snap):
             lines.append(f"   {w['label']:<22s}{pct}  resets in {w['resets_in']}{exp}")
         if d.get("credits") and d["credits"].get("balance") is not None:
             lines.append(f"   credits balance        {d['credits']['balance']:.2f}")
+        rc = d.get("reset_credits")
+        if rc and rc.get("available"):
+            lines.append(f"   free limit resets      {rc['available']} available (next expires {rc['next_expires_at']})")
         for n in d.get("notes", []):
             lines.append(f"   note: {n}")
     a = snap["advice"]
-    lines.append(f"advice: claude={a['claude']} codex={a['codex']} prefer={a['prefer']} -> {a['rule']}")
+    levels = " ".join(f"{v}={a[v]}" for v in ("claude", "codex") if v in a)
+    lines.append(f"advice: {levels} prefer={a['prefer']} -> {a['rule']}")
     return "\n".join(lines)
 
 

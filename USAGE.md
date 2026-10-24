@@ -19,7 +19,7 @@ for Codex.
 | Vendor | Live source | Fallback | Token handling |
 |---|---|---|---|
 | Claude | `GET https://api.anthropic.com/api/oauth/usage` with the claude.ai OAuth token from `~/.claude/.credentials.json` (the same call `/usage` makes) | none | If the stored token is expired the script runs one Haiku `claude -p` call, which makes Claude Code refresh and rewrite the file. `--no-refresh` disables that; the snapshot is then `unavailable`. |
-| Codex | `codex app-server` JSON-RPC `initialize` + `account/rateLimits/read` (what `/status` shows) | last `token_count` event in `~/.codex/sessions/**/*.jsonl`, reported as `stale` | Codex's own auth; nothing is read from `auth.json`. |
+| Codex | `codex app-server` JSON-RPC `initialize` + `account/rateLimits/read` (what `/status` shows): the default bucket, every extra bucket in `rateLimitsByLimitId`, `ordinaryUsageAllowed` and `rateLimitResetCredits` | last `token_count` event in `~/.codex/sessions/**/*.jsonl`, reported as `stale` (default bucket only) | Codex's own auth; nothing is read from `auth.json`. |
 
 Both are read-only. Neither writes anything except the cache at
 `~/.cache/orchestration-usage/last.json`.
@@ -29,21 +29,38 @@ Both are read-only. Neither writes anything except the cache at
 ```
 vendors.<claude|codex>
   status        ok | stale | unavailable
-  plan          team / max / business / ...
+  plan          Claude: pro / max / team / ...   Codex: plus / pro / prolite / business / ...
   level         green | yellow | red | null (nothing measurable)
   windows[]     id, label, percent used, resets_at, resets_in,
                 expected_percent_now (elapsed share of the window), pace: ahead | on | behind
+                (Codex windows from an extra per-model bucket carry `bucket` and the bucket
+                name in the label; they do not set the level or binding, but a yellow or red
+                bucket adds a note, so check notes before routing to that model)
   binding       the window with the least headroom
   extra_usage   (Claude) whether overage credits are on
-  credits, individual_limit, rate_limit_reached_type   (Codex)
+  credits, individual_limit, rate_limit_reached_type,
+  ordinary_usage_allowed, reset_credits {available, next_expires_at}   (Codex)
 advice          level per vendor, prefer: claude | codex | either | neither, one-line rule, notes
+                (with --vendor only that vendor's level, and prefer: n/a)
 ```
 
-Thresholds, in the script's constants: red at 90 % of any window or a vendor-reported lock;
-yellow at 70 %, or 50 % while running more than 1.3x ahead of pace. Account shapes differ: a
-ChatGPT business account with credits shows no 5-hour/weekly window, only a monthly individual
-limit; Claude Team shows session, weekly-all and a per-model weekly window. The script reports
-whatever the vendor returns, so read the labels rather than assuming the shape.
+Thresholds, in the script's constants: red at 90 % of any window or a vendor-reported stop
+(Claude lock; Codex `rateLimitReachedType`, spend control, `ordinaryUsageAllowed: false`, or no
+credits and no window); yellow at 70 %, or 50 % while running more than 1.3x ahead of pace.
+
+Account shapes differ, and the script reports whatever the vendor returns, so read the labels
+rather than assuming the shape:
+
+| Account | Windows you will see |
+|---|---|
+| Claude Pro / Max | 5-hour, weekly all models, and a weekly per-model window (for example Fable) |
+| Claude Team | session, weekly all models, per-model weekly |
+| ChatGPT Plus / Pro / Pro Lite (standard) | a single 7-day window, or a 5-hour primary plus a weekly secondary, depending on plan; sometimes extra per-model buckets; a credits balance used after the windows run out; occasional free "full reset" credits |
+| ChatGPT Business with credits | no 5-hour or weekly window, only a monthly individual limit |
+
+On a standard Codex account a red window is not the end of the road: `credits.balance` keeps
+usage going at credit cost, and `reset_credits.available` counts free full resets. Spending
+either is the user's call; mention them when reporting Codex red, do not use them yourself.
 
 ## How the orchestrator uses it
 

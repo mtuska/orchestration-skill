@@ -142,7 +142,13 @@ level per vendor: green, yellow, red, or unknown. Rules, in full in `USAGE.md` n
   routing down to a model the table forbids.
 - Cross-checks are never skipped for budget; use the cheapest checker the cross-check table
   allows on the constrained vendor.
-- Both red, or quota unknown for both: stop launching and report the snapshot and reset times.
+- Both red: stop launching and report the snapshot and reset times.
+- Quota unknown (the script could not read a vendor): treat that vendor as yellow and say in the
+  record that the quota was not read. If both are unknown, route by fit and re-run the script
+  before large launches.
+
+Works with standard and business accounts on both sides (Claude Pro/Max/Team; ChatGPT
+Plus/Pro/Pro Lite/Business). Window shapes differ by plan; `USAGE.md` lists them.
 
 In the Claude desktop app, `mcp__ccd_session_mgmt__get_usage` gives the Claude half directly; the
 script is the only source for Codex.
