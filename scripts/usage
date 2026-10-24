@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""usage: plan-quota snapshot for Claude (claude.ai OAuth) and Codex (ChatGPT) in one JSON.
+
+Companion to the orchestration skill. Read-only, stdlib only.
+
+  usage                 # JSON for both vendors, with a routing hint
+  usage --text          # short human summary
+  usage --vendor codex  # one vendor
+  usage --no-refresh    # never spend a Haiku call to refresh an expired Claude token
+  usage --no-cache      # ignore the 60s cache
+
+Exit 0 when at least one vendor was read; 2 when neither could be read.
+"""
+import argparse
+import datetime as dt
+import glob
+import json
+import os
+import select
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+HOME = os.path.expanduser("~")
+CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.join(HOME, ".cache")), "orchestration-usage")
+CACHE_FILE = os.path.join(CACHE_DIR, "last.json")
+CLAUDE_CREDS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(HOME, ".claude")), ".credentials.json")
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CODEX_HOME = os.environ.get("CODEX_HOME", os.path.join(HOME, ".codex"))
+
+RED_PCT = 90
+YELLOW_PCT = 70
+PACE_YELLOW = 1.3  # used% / expected% at this point of the window
+
+
+def now_utc():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def iso(d):
+    return d.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_ts(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return dt.datetime.fromtimestamp(v if v < 1e11 else v / 1000, dt.timezone.utc)
+    try:
+        return dt.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def human_delta(secs):
+    if secs is None:
+        return None
+    secs = max(0, int(secs))
+    d, r = divmod(secs, 86400)
+    h, r = divmod(r, 3600)
+    m = r // 60
+    if d:
+        return f"{d}d {h}h"
+    if h:
+        return f"{h}h {m}m"
+    return f"{m}m"
+
+
+def window(wid, label, percent, resets_at, duration_s, active=None, extra=None):
+    """Normalise one quota window and compute pace against elapsed time."""
+    now = now_utc()
+    w = {"id": wid, "label": label, "percent": None if percent is None else round(float(percent), 1),
+         "resets_at": iso(resets_at) if resets_at else None,
+         "resets_in": human_delta((resets_at - now).total_seconds()) if resets_at else None,
+         "window_hours": round(duration_s / 3600, 1) if duration_s else None,
+         "expected_percent_now": None, "pace_ratio": None, "pace": "n/a"}
+    if active is not None:
+        w["is_active"] = bool(active)
+    if percent is not None and resets_at and duration_s:
+        start = resets_at - dt.timedelta(seconds=duration_s)
+        frac = (now - start).total_seconds() / duration_s
+        frac = min(1.0, max(0.0, frac))
+        expected = frac * 100
+        w["expected_percent_now"] = round(expected, 1)
+        if expected >= 2:
+            ratio = float(percent) / expected
+            w["pace_ratio"] = round(ratio, 2)
+            w["pace"] = "ahead" if ratio > 1.1 else ("behind" if ratio < 0.9 else "on")
+    if extra:
+        w.update(extra)
+    return w
+
+
+def level_for(windows, hard_stop=False):
+    if hard_stop:
+        return "red"
+    if not any(w.get("percent") is not None for w in windows):
+        return None  # nothing measurable: caller treats as unknown
+    worst = "green"
+    for w in windows:
+        p = w.get("percent")
+        if p is None:
+            continue
+        if p >= RED_PCT:
+            return "red"
+        if p >= YELLOW_PCT or (p >= 50 and (w.get("pace_ratio") or 0) > PACE_YELLOW):
+            worst = "yellow"
+    return worst
+
+
+def binding(windows):
+    cands = [w for w in windows if w.get("percent") is not None]
+    if not cands:
+        return None
+    b = max(cands, key=lambda w: w["percent"])
+    return {"id": b["id"], "label": b["label"], "percent": b["percent"], "headroom_percent": round(100 - b["percent"], 1),
+            "resets_in": b.get("resets_in")}
+
+
+# ---------------------------------------------------------------- Claude
+
+def claude_token(allow_refresh):
+    try:
+        with open(CLAUDE_CREDS) as f:
+            creds = json.load(f)["claudeAiOauth"]
+    except (OSError, KeyError, ValueError) as e:
+        return None, None, f"no claude.ai OAuth credentials at {CLAUDE_CREDS} ({e})"
+    exp_ms = creds.get("expiresAt") or 0
+    refreshed = None
+    if exp_ms and exp_ms / 1000 < time.time() + 60 and allow_refresh:
+        # Claude Code refreshes and rewrites the file on any authenticated call. Cheapest known: one Haiku word.
+        try:
+            subprocess.run(["claude", "-p", "reply with the single word ok", "--model", "haiku", "--output-format", "text"],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=120, cwd=CACHE_DIR)
+            with open(CLAUDE_CREDS) as f:
+                creds = json.load(f)["claudeAiOauth"]
+            refreshed = "claude -p haiku"
+        except (OSError, subprocess.SubprocessError, KeyError, ValueError) as e:
+            return None, creds, f"token expired and refresh failed ({e})"
+    return creds.get("accessToken"), creds, refreshed
+
+
+def read_claude(allow_refresh):
+    out = {"vendor": "claude", "status": "unavailable", "source": "oauth_usage", "plan": None, "windows": [], "notes": []}
+    token, creds, info = claude_token(allow_refresh)
+    if creds:
+        out["plan"] = creds.get("subscriptionType")
+        out["rate_limit_tier"] = creds.get("rateLimitTier")
+    if not token:
+        out["notes"].append(info or "no token")
+        if creds and not allow_refresh:
+            out["notes"].append("token expired; rerun without --no-refresh, or use any claude call to refresh it")
+        return out
+    if info:
+        out["notes"].append(f"token refreshed via {info}")
+    req = urllib.request.Request(CLAUDE_USAGE_URL, headers={
+        "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": "orchestration-usage/1 (claude-code companion)"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        out["notes"].append(f"HTTP {e.code} from usage endpoint" + (" (token rejected; rerun to refresh)" if e.code == 401 else ""))
+        return out
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        out["notes"].append(f"usage endpoint unreachable: {e}")
+        return out
+
+    windows = []
+    hard_stop = False
+    limits = data.get("limits")
+    if isinstance(limits, list) and limits:
+        for i, lim in enumerate(limits):
+            kind = lim.get("kind")
+            dur = 5 * 3600 if kind == "session" else 7 * 86400 if str(kind).startswith("weekly") else None
+            label = {"session": "5-hour", "weekly_all": "weekly all models"}.get(kind, kind)
+            scope = (lim.get("scope") or {}).get("model") or {}
+            if scope.get("display_name"):
+                label = f"weekly {scope['display_name']}"
+            wid = kind if kind != "weekly_scoped" else f"weekly_{(scope.get('display_name') or i).__str__().lower()}"
+            windows.append(window(wid, label, lim.get("percent"), parse_ts(lim.get("resets_at")), dur,
+                                  active=lim.get("is_active"), extra={"severity": lim.get("severity")}))
+            if lim.get("severity") in ("exceeded", "critical", "locked"):
+                hard_stop = True
+    else:  # older shape
+        for key, label, dur in (("five_hour", "5-hour", 5 * 3600), ("seven_day", "weekly all models", 7 * 86400),
+                                ("seven_day_opus", "weekly Opus", 7 * 86400), ("seven_day_sonnet", "weekly Sonnet", 7 * 86400)):
+            v = data.get(key)
+            if isinstance(v, dict) and v.get("utilization") is not None:
+                windows.append(window(key, label, v["utilization"], parse_ts(v.get("resets_at")), dur))
+                if v.get("locked_reason"):
+                    hard_stop = True
+    xu = data.get("extra_usage") or {}
+    out["extra_usage"] = {"enabled": bool(xu.get("is_enabled")), "utilization": xu.get("utilization"),
+                          "monthly_limit": xu.get("monthly_limit"), "used_credits": xu.get("used_credits"),
+                          "disabled_reason": xu.get("disabled_reason")}
+    out["windows"] = windows
+    out["binding"] = binding(windows)
+    out["level"] = level_for(windows, hard_stop)
+    out["status"] = "ok" if windows else "unavailable"
+    if not windows:
+        out["notes"].append("usage endpoint returned no limits (API-key or gateway auth has no plan windows)")
+    return out
+
+
+# ---------------------------------------------------------------- Codex
+
+def codex_rpc_rate_limits(timeout=25):
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"clientInfo": {"name": "orchestration-usage", "title": "orchestration usage", "version": "1"}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": {}}]
+    p = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, text=True)
+    try:
+        p.stdin.write("".join(json.dumps(m) + "\n" for m in msgs))
+        p.stdin.flush()
+        deadline = time.time() + timeout
+        buf = ""
+        while time.time() < deadline:
+            r, _, _ = select.select([p.stdout], [], [], max(0.05, deadline - time.time()))
+            if not r:
+                break
+            chunk = os.read(p.stdout.fileno(), 65536).decode("utf-8", "replace")
+            if not chunk:
+                break
+            buf += chunk
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                if msg.get("id") == 2:
+                    if "error" in msg:
+                        raise RuntimeError(msg["error"])
+                    return msg["result"]
+        raise TimeoutError("no rateLimits response from codex app-server")
+    finally:
+        p.kill()
+
+
+def codex_last_snapshot():
+    """Fallback: the most recent token_count event in local Codex sessions (snake_case shape)."""
+    files = sorted(glob.glob(os.path.join(CODEX_HOME, "sessions", "*", "*", "*", "*.jsonl")), key=os.path.getmtime, reverse=True)
+    for path in files[:20]:
+        last = None
+        try:
+            with open(path, errors="replace") as f:
+                for line in f:
+                    if '"rate_limits"' in line:
+                        last = line
+        except OSError:
+            continue
+        if last:
+            try:
+                ev = json.loads(last)
+            except ValueError:
+                continue
+            payload = ev.get("payload", ev)
+            rl = payload.get("rate_limits")
+            if rl:
+                return rl, ev.get("timestamp"), path
+    return None, None, None
+
+
+def norm_codex(rl, camel):
+    """Normalise either the app-server (camelCase) or session-log (snake_case) rate-limit object."""
+    def g(obj, camel_key, snake_key):
+        if not isinstance(obj, dict):
+            return None
+        return obj.get(camel_key if camel else snake_key)
+
+    windows = []
+    for key, label in (("primary", "primary (short)"), ("secondary", "secondary (weekly)")):
+        w = rl.get(key)
+        if isinstance(w, dict):
+            mins = g(w, "windowDurationMins", "window_minutes") or g(w, "windowDurationMins", "window_duration_mins")
+            dur = mins * 60 if mins else None
+            lab = label
+            if mins:
+                lab = f"{int(mins/60)}-hour" if mins < 1440 * 2 else f"{round(mins/1440)}-day"
+            windows.append(window(f"codex_{key}", lab, g(w, "usedPercent", "used_percent"),
+                                  parse_ts(g(w, "resetsAt", "resets_at")), dur))
+    il = g(rl, "individualLimit", "individual_limit")
+    individual = None
+    if isinstance(il, dict):
+        try:
+            limit, used = float(il.get("limit")), float(il.get("used"))
+            pct = used / limit * 100 if limit else None
+        except (TypeError, ValueError):
+            limit = used = pct = None
+        resets = parse_ts(g(il, "resetsAt", "resets_at"))
+        individual = {"limit": limit, "used": used, "remaining_percent": g(il, "remainingPercent", "remaining_percent"),
+                      "resets_at": iso(resets) if resets else None}
+        # Window length is unknown (monthly in practice); use the reset to estimate 30 days.
+        windows.append(window("codex_individual", "individual limit", pct, resets, 30 * 86400,
+                              extra={"pace_basis": "estimated 30-day window ending at reset"}))
+    credits = rl.get("credits") or {}
+    reached = g(rl, "rateLimitReachedType", "rate_limit_reached_type")
+    spend_stop = bool(g(rl, "spendControlReached", "spend_control_reached"))
+    hard_stop = bool(reached) or spend_stop or (credits and credits.get("has_credits") is False and not windows)
+    return {
+        "plan": g(rl, "planType", "plan_type"),
+        "windows": windows,
+        "individual_limit": individual,
+        "credits": {"has_credits": g(credits, "hasCredits", "has_credits"), "unlimited": credits.get("unlimited"),
+                    "balance": (lambda b: float(b) if b not in (None, "") else None)(credits.get("balance"))} if credits else None,
+        "rate_limit_reached_type": reached,
+        "spend_control_reached": spend_stop,
+        "binding": binding(windows),
+        "level": level_for(windows, hard_stop),
+    }
+
+
+def read_codex():
+    out = {"vendor": "codex", "status": "unavailable", "source": None, "plan": None, "windows": [], "notes": []}
+    try:
+        res = codex_rpc_rate_limits()
+        rl = res.get("rateLimits") or {}
+        out.update(norm_codex(rl, camel=True))
+        out["source"] = "app-server account/rateLimits/read"
+        out["status"] = "ok"
+        return out
+    except (OSError, RuntimeError, TimeoutError, KeyError, ValueError) as e:
+        out["notes"].append(f"app-server query failed: {e}")
+    rl, ts, path = codex_last_snapshot()
+    if rl:
+        out.update(norm_codex(rl, camel=False))
+        out["source"] = f"stale session log {os.path.basename(path)}"
+        out["status"] = "stale"
+        out["snapshot_at"] = ts
+        out["notes"].append("values are from the last Codex turn on this machine, not live")
+    else:
+        out["notes"].append("no local Codex session with rate-limit data either")
+    return out
+
+
+# ---------------------------------------------------------------- advice
+
+LEVEL_RANK = {"green": 0, "yellow": 1, "red": 2, None: 1}  # unknown counts as yellow
+
+
+def advise(vendors):
+    c, x = vendors.get("claude"), vendors.get("codex")
+    lc = c.get("level") if c and c["status"] in ("ok", "stale") else None
+    lx = x.get("level") if x and x["status"] in ("ok", "stale") else None
+    notes = []
+    for v, lvl in (("claude", lc), ("codex", lx)):
+        vd = vendors.get(v) or {}
+        b = vd.get("binding")
+        if lvl is None:
+            notes.append(f"{v}: quota unknown ({'; '.join(vd.get('notes') or ['not read'])}); treat as yellow")
+        elif b:
+            pace = next((w.get("pace") for w in vd.get("windows", []) if w["id"] == b["id"]), "n/a")
+            notes.append(f"{v}: {lvl}; binding window '{b['label']}' at {b['percent']}% used, resets in {b['resets_in']}, pace {pace}")
+    rc, rx = LEVEL_RANK[lc], LEVEL_RANK[lx]
+    if lc == "red" and lx == "red":
+        prefer, rule = "neither", "both vendors red: stop launching new work and tell the user"
+    elif lc is None and lx is None:
+        prefer, rule = "either", "quota unknown for both vendors: route by fit, say so in the record, and re-run usage before large launches"
+    elif rc == rx:
+        prefer, rule = "either", "route by fit alone"
+    elif rc < rx:
+        prefer, rule = "claude", "fit first; when the table lists both vendors as suitable, pick the Claude model"
+    else:
+        prefer, rule = "codex", "fit first; when the table lists both vendors as suitable, pick the Codex model"
+    return {"claude": lc or "unknown", "codex": lx or "unknown", "prefer": prefer, "rule": rule, "notes": notes}
+
+
+def text_report(snap):
+    lines = [f"usage snapshot {snap['generated_at']}" + (" (cached)" if snap.get("from_cache") else "")]
+    for v in ("claude", "codex"):
+        d = snap["vendors"].get(v)
+        if not d:
+            continue
+        head = f"{v:6s} {d['status']:11s} plan={d.get('plan')} level={d.get('level', '-')} via {d.get('source')}"
+        lines.append(head)
+        for w in d.get("windows", []):
+            pct = "  -- " if w["percent"] is None else f"{w['percent']:5.1f}%"
+            exp = f" (expected {w['expected_percent_now']}%, {w['pace']})" if w.get("expected_percent_now") is not None else ""
+            lines.append(f"   {w['label']:<22s}{pct}  resets in {w['resets_in']}{exp}")
+        if d.get("credits") and d["credits"].get("balance") is not None:
+            lines.append(f"   credits balance        {d['credits']['balance']:.2f}")
+        for n in d.get("notes", []):
+            lines.append(f"   note: {n}")
+    a = snap["advice"]
+    lines.append(f"advice: claude={a['claude']} codex={a['codex']} prefer={a['prefer']} -> {a['rule']}")
+    return "\n".join(lines)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--vendor", choices=["claude", "codex", "all"], default="all")
+    ap.add_argument("--text", action="store_true", help="human summary instead of JSON")
+    ap.add_argument("--no-refresh", action="store_true", help="do not spend a Haiku call to refresh an expired Claude token")
+    ap.add_argument("--no-cache", action="store_true", help="always query live")
+    ap.add_argument("--cache-ttl", type=int, default=60, help="seconds a previous snapshot is reused (default 60)")
+    args = ap.parse_args()
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+    snap = None
+    if not args.no_cache and args.vendor == "all":
+        try:
+            with open(CACHE_FILE) as f:
+                prev = json.load(f)
+            if time.time() - prev.get("generated_epoch", 0) < args.cache_ttl:
+                snap = prev
+                snap["from_cache"] = True
+        except (OSError, ValueError):
+            pass
+    if snap is None:
+        vendors = {}
+        if args.vendor in ("claude", "all"):
+            vendors["claude"] = read_claude(allow_refresh=not args.no_refresh)
+        if args.vendor in ("codex", "all"):
+            vendors["codex"] = read_codex()
+        snap = {"generated_at": iso(now_utc()), "generated_epoch": time.time(), "vendors": vendors, "advice": advise(vendors)}
+        if args.vendor == "all":
+            try:
+                with open(CACHE_FILE, "w") as f:
+                    json.dump(snap, f, indent=1)
+            except OSError:
+                pass
+    print(text_report(snap) if args.text else json.dumps(snap, indent=2))
+    ok = any(v["status"] in ("ok", "stale") for v in snap["vendors"].values())
+    sys.exit(0 if ok else 2)
+
+
+if __name__ == "__main__":
+    main()
