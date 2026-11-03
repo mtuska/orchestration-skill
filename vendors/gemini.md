@@ -11,12 +11,10 @@ only `gemini-*` model IDs.
 Every kind of work: reading, review, planning, editing and implementation. Setup facts:
 
 - **Commands run only if allowed.** `agy` in headless mode auto-denies every command that no allow
-  rule in its `settings.json` (`~/.gemini/antigravity-cli/settings.json`, `permissions.allow`)
-  covers, and the bridge then fails the run with `denied_actions`. Seen on 2026-11-02: a question
-  the model chose to answer with a command was denied and returned nothing. On 2026-11-02 that file
-  held no allow rules, so builds and tests for Gemini's work are run by the checker or by you until
-  the user adds rules for the commands it needs. Adding them is the user's configuration; do not
-  edit it yourself.
+  rule covers, and the run then fails with `denied_actions`. Seen on 2026-11-02: a question the
+  model chose to answer with a command was denied and returned nothing. Give the project its own
+  rules first (`../PROJECT-SETUP.md`) and pass them with `--settings`; then Gemini builds, tests
+  and runs repros like the other vendors. Never edit the global `settings.json`.
 - **File edits are auto-accepted.** The bridge always runs `agy` in `accept-edits` mode, so
   implementation works without approval prompts. The other side: "do not modify files" is only an
   instruction in the brief, so for read-only work check the workspace after the run.
@@ -24,8 +22,24 @@ Every kind of work: reading, review, planning, editing and implementation. Setup
 
 ## How to launch
 
-The `cc-gemini-plugin` bridge, run through the shell tool's background facility. The bridge passes
-the task to `agy` over stdin unchanged and prints one JSON envelope:
+Two forms, both run through the shell tool's background facility.
+
+**With commands (builds, tests, repros, any work that runs things):** call `agy` directly, because
+the bridge cannot pass `--settings`. Run it from the workspace root:
+
+```bash
+cd <workdir> && agy -p "$(cat <task-dir>/prompt.md)" --model gemini-4-argon-high --mode accept-edits --settings <workdir>/.agents/agy-settings.json --output-format json --disable-slash-commands --print-timeout 900s < /dev/null > <task-dir>/result.json 2> <task-dir>/run.log; echo "gemini exit $?"
+```
+
+Read `response` for the answer. The run exits 0 even when a command was refused, so also require
+`denied_actions` to be absent and `status` to be `SUCCESS`. `conversation_id` resumes the
+conversation with `--conversation <id>`, and `usage` has token counts. Seen on 2026-11-02: with an
+allow rule for `wc`, `wc -l` ran and its real output came back; without one, the same run exited 0
+with an empty `response` and `denied_actions` set.
+
+**Without commands (reading, review, edits someone else will build):** the `cc-gemini-plugin`
+bridge. It passes the task to `agy` over stdin unchanged, fails the run itself on any denied action,
+and prints one JSON envelope:
 
 ```bash
 B=$(ls -d ~/.claude/plugins/cache/cc-gemini-plugin/cc-gemini-plugin/*/skills/gemini-integration/scripts/gemini-bridge.mjs | sort -V | tail -1)
@@ -44,8 +58,9 @@ node "$B" --cwd <workdir> --model gemini-4-argon-high --format json --timeout 90
 - For read-only work, capture `git status --porcelain` and `git diff --stat` (or a checksum list
   outside Git) before launch and compare after. Any change made by a checker fails the check;
   report it, do not keep it.
-- Say in the brief which commands it may run. A command that is not allowed fails the whole run,
-  so while none are allowed, ask it to edit and read only and say who will build and test.
+- Say in the brief exactly which commands it may run (those in the project's allow rules). A
+  command that is not allowed fails the whole run. With the bridge, which allows none, ask it to
+  edit and read only and say who will build and test.
 - The plugin also provides the Agent tool type `cc-gemini-plugin:gemini-agent` (a Claude wrapper
   with Bash, Glob and Read that runs the same bridge) and the `/cc-gemini-plugin:gemini` command.
   The wrapper works (smoke test 2026-11-02: exit 0, `ok: true`, correct answer), but its report

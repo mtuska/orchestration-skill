@@ -38,8 +38,10 @@ model through them as a check by that tool's vendor.
 can check any other vendor's work. They differ in how well, which is what the rankings below and
 `BENCHMARKS.md` are for, and in what their tool needs set up first. **Read the vendor's file before
 launching one of its models**: it gives the launch command, how to read the result, and the setup
-facts (Gemini and Cursor run only the commands their allowlists permit; Cursor reports success
-even when a command was refused). `BENCHMARKS.md` holds the evidence behind the rankings; read it
+facts (Cursor reports success even when a command was refused). Gemini and Cursor run only the
+commands a project's allow rules permit: before either works in a project, set those rules up
+there as `PROJECT-SETUP.md` describes (per project, never global); after that they build and test
+like the others. `BENCHMARKS.md` holds the evidence behind the rankings; read it
 when a choice is close or contested.
 
 ## Before routing: read the quota
@@ -76,12 +78,12 @@ Route by the hardest and most consequential part of the task, not its length.
 | Task kind | Ranked fit, best first | Notes |
 |---|---|---|
 | Architecture, design, plans that set direction | Fable 5.1 (or Opus 5.5), Astra, Argon, Grok 4.7 | High consequence; spend on the strongest model available |
-| Hard root cause, ambiguous bugs, concurrency, persistence, lifecycle ordering | Opus 5.5 or Fable 5.1, Astra, Argon, Grok 4.7 | Do not route these down because the diff is small. Diagnosis usually runs repros: with Gemini or Cursor, allow the commands or have another agent run them |
+| Hard root cause, ambiguous bugs, concurrency, persistence, lifecycle ordering | Opus 5.5 or Fable 5.1, Astra, Argon, Grok 4.7 | Do not route these down because the diff is small. Diagnosis usually runs repros: give Gemini or Cursor the project's command setup first |
 | Security review, auth, input validation, anything security-sensitive (even small diffs) | Astra, Argon, Opus 5.5 or Fable 5.1, Grok 4.7 | Astra and Argon lead SEC-Bench Pro and ExploitGym. Use a vendor's strongest model here, not its small one |
 | Migration, rollback, data conversion, schema/wire changes | Opus 5.5, Astra, Argon, Grok 4.7 | Requires a rehearsal or test plan |
-| Complex implementation, large refactors | Opus 5.5, Astra or Sol, Argon, Grok 4.7 | Argon leads DeepSWE. Whoever cannot run the build and tests hands them to the checker |
-| Routine implementation, local fixes | Sonnet 5.5, Sol, Argon, Grok 4.7 or Composer 2.5 | Same note on builds and tests |
-| Terminal-heavy runs: builds, test suites, benchmark runs, collecting results | Sonnet 5.5, Sol or Astra, Argon, Grok 4.7 | Sonnet leads Terminal-Bench 4.0 (70.6); Astra 57.9, Argon 57.4, Grok 4.7 38.0. Gemini and Cursor need the commands on their allowlists first |
+| Complex implementation, large refactors | Opus 5.5, Astra or Sol, Argon, Grok 4.7 | Argon leads DeepSWE |
+| Routine implementation, local fixes | Sonnet 5.5, Sol, Argon, Grok 4.7 or Composer 2.5 | |
+| Terminal-heavy runs: builds, test suites, benchmark runs, collecting results | Sonnet 5.5, Sol or Astra, Argon, Grok 4.7 | Sonnet leads Terminal-Bench 4.0 (70.6); Astra 57.9, Argon 57.4, Grok 4.7 38.0. Gemini and Cursor need the project's command setup first |
 | Reading very long inputs: whole subsystems, long logs or traces, cross-file consistency | Argon, Astra, Opus 5.5, Grok 4.7 | Argon leads GraphWalks 256K-1M; give it paths and a precise question. Grok's window is 500K |
 | Experiment design, statistics, interpreting benchmark or A/B results, causal claims | Opus 5.5, Astra, Argon, Grok 4.7 | Not arithmetic; needs reasoning about noise and confounds |
 | UI and visual QA that drives the app (clicks, screenshots, layout) | Sonnet 5.5 or Opus 5.5, Astra, Argon, Grok 4.7 | Requires the tools to see the UI; say if they cannot. No computer-use score for Grok |
@@ -117,8 +119,8 @@ best checker for that kind of work, best first; take the first that is not red.
 
 For security-sensitive or high-impact work, use the checker vendor's strongest model (Astra, Opus
 5.5 or Fable 5.1, Argon, Grok 4.7 xhigh), not its small one. A check that needs to run something (a
-test, a repro) needs the commands allowed for that checker; if they are not, the checker says what
-it could not run, and that part stays unverified until it is run by someone.
+test, a repro) needs the project's command setup for a Gemini or Cursor checker; whatever a
+checker could not run, it says so, and that part stays unverified until someone runs it.
 
 Proportionality: every substantive change, plan or conclusion gets one check. A pure data run
 (build, benchmark run) is not repeated; its interpretation is checked from the raw logs.
@@ -143,8 +145,9 @@ Write the brief to a file and pass it. A good brief has:
 A cross-check brief adds: the original task brief, the produced diff or document (paths), the
 acceptance criteria, and the instruction to report findings ranked by severity, each with
 file:line evidence and "confirmed" or "suspected", to state what it could not inspect, and to say
-plainly when it finds nothing. A Gemini or Cursor brief also says which commands it may run (only
-those on its allowlist will work), and asks for the answer on its own line.
+plainly when it finds nothing. A Gemini or Cursor brief also lists exactly the commands it may run
+(those in the project's allow rules; anything else fails or, in Cursor, comes back invented), and
+asks for the answer on its own line.
 
 ## Orchestrator duties that stay with you
 

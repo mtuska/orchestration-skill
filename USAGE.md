@@ -94,8 +94,9 @@ down a row to go:
    their first choice unless it is red.
 3. **A vendor red:** launch no new *work* on it; take the next model in the row from another
    vendor. If that model is clearly weaker for high-consequence work, say so in the record, and
-   ask the user when the gap is large. If the next model's tool cannot run a step the work needs
-   (Gemini and Cursor run only allowlisted commands), give that step to another agent.
+   ask the user when the gap is large. If the next model's tool cannot yet run a step the work
+   needs (Gemini and Cursor run only the commands in the project's allow rules), add the rule as
+   `PROJECT-SETUP.md` describes, or give that step to another agent.
 4. **Cross-checks are never skipped for budget.** They are small relative to the work. On a
    yellow or red vendor take the next checker in the row, or the vendor's cheaper model where the
    work is ordinary (Sol instead of Astra for ordinary code; Haiku, Luna, Flash or Composer for

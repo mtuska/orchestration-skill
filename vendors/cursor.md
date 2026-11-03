@@ -18,11 +18,11 @@ Every kind of work: reading, review, planning, editing and implementation. Setup
   (planning, no edits) are the CLI's read-only modes. Seen on 2026-11-02: both Grok 4.7 and
   Composer 2.5 answered a file question correctly in `ask` mode with the workspace unchanged.
 - **Edits work in the default mode.** Without `--mode`, print mode (`-p`) has write and shell tools.
-- **Commands follow the user's allowlist.** A command not on the allowlist in
-  `~/.cursor/cli-config.json` is rejected (the allowlist there held only `Shell(ls)` on
-  2026-11-02), so builds and tests for Cursor's work are run by the checker or by you until the user
-  allows them. `--force` / `--yolo` runs every command; do not use it without the user's say-so,
-  and do not edit the allowlist.
+- **Commands run only if allowed.** A command no allow rule covers is rejected (the global
+  `~/.cursor/cli-config.json` allowed only `Shell(ls)` on 2026-11-02). Give the project its own
+  rules first in `<workdir>/.cursor/cli.json` (`../PROJECT-SETUP.md`), which the CLI reads from the
+  workspace root; then Cursor builds, tests and runs repros like the other vendors. Never edit the
+  global config, and never use `--force` / `--yolo`, which runs every command.
 - **A rejected command still reports success.** Seen on 2026-11-02: asked to run `wc -l`, the
   command was rejected, the run ended `is_error: false` with exit 0, and the model wrote what the
   output "would" be. Never accept a command result from Cursor without the log line that shows it
