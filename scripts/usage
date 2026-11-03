@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""usage: plan-quota snapshot for Claude (claude.ai OAuth) and Codex (ChatGPT) in one JSON.
+"""usage: plan-quota snapshot for Claude (claude.ai OAuth), Codex (ChatGPT), Gemini (Antigravity) and Cursor in one JSON.
 
 Companion to the orchestration skill. Read-only, stdlib only.
 
-  usage                 # JSON for both vendors, with a routing hint
+  usage                 # JSON for every vendor, with a routing hint
   usage --text          # short human summary
   usage --vendor codex  # one vendor
   usage --no-refresh    # never spend a Haiku call to refresh an expired Claude token
   usage --no-cache      # ignore the 60s cache
 
-Exit 0 when at least one vendor was read; 2 when neither could be read.
+Exit 0 when at least one vendor was read; 2 when none could be read.
 """
 import argparse
 import datetime as dt
@@ -383,19 +383,105 @@ def read_codex():
     return out
 
 
+# ---------------------------------------------------------------- Gemini
+
+# agy groups its quota by model family. Only the Gemini groups are the Gemini vendor; the
+# "Claude and GPT models" group is Anthropic and OpenAI models served through agy.
+GEMINI_LEVEL_GROUPS = ("gemini models",)
+WINDOW_SECONDS = {"5h": 5 * 3600, "weekly": 7 * 86400}
+
+
+def agy_command(cmd, timeout=60):
+    """A read-only slash command in print mode: no agent turn, no quota spent, no conversation kept."""
+    p = subprocess.run(["agy", "-p", cmd, "--output-format", "json"], stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=timeout, cwd=CACHE_DIR)
+    if p.returncode != 0:
+        raise RuntimeError(f"agy -p {cmd} exited {p.returncode}: {(p.stderr or p.stdout).strip()[:200]}")
+    return (json.loads(p.stdout).get("command") or {}).get("data") or {}
+
+
+def read_gemini():
+    out = {"vendor": "gemini", "status": "unavailable", "source": None, "plan": None, "windows": [], "notes": []}
+    try:
+        data = agy_command("/usage")
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as e:
+        out["notes"].append(f"agy usage query failed: {e}")
+        return out
+    windows, extra = [], []
+    for grp in data.get("groups") or []:
+        gname = grp.get("name") or "?"
+        counts = gname.lower() in GEMINI_LEVEL_GROUPS
+        bw = []
+        for b in grp.get("buckets") or []:
+            frac = b.get("remaining_fraction")
+            used = None if frac is None else (1 - float(frac)) * 100
+            label = f"{'5-hour' if b.get('window') == '5h' else b.get('window') or '?'} ({gname})"
+            w = window(f"gemini_{b.get('id')}", label, used, parse_ts(b.get("reset_time")),
+                       WINDOW_SECONDS.get(b.get("window")))
+            if not counts:
+                w["bucket"] = gname
+            bw.append(w)
+        if counts:
+            windows += bw
+        else:
+            extra += bw
+            lvl = level_for(bw)
+            if lvl in ("yellow", "red"):
+                out["notes"].append(f"agy group '{gname}' is {lvl}; models limited by it may be unavailable")
+    try:
+        cr = agy_command("/credits")
+        out["credits"] = {"balance": cr.get("remaining_credits")}
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError):
+        out["credits"] = None
+    out["windows"] = windows + extra
+    out["binding"] = binding(windows)
+    out["level"] = level_for(windows)
+    out["source"] = "agy -p /usage"
+    out["status"] = "ok" if windows else "unavailable"
+    if not windows:
+        out["notes"].append("agy reported no Gemini quota group (signed out, or an API-key / Cloud project sign-in)")
+    return out
+
+
+# ---------------------------------------------------------------- Cursor
+
+def cursor_json(*args, timeout=30):
+    p = subprocess.run(["cursor-agent", *args, "--format", "json"], stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=timeout, cwd=CACHE_DIR)
+    if p.returncode != 0:
+        raise RuntimeError(f"cursor-agent {' '.join(args)} exited {p.returncode}: {(p.stderr or p.stdout).strip()[:200]}")
+    return json.loads(p.stdout)
+
+
+def read_cursor():
+    """Sign-in and plan only. cursor-agent shows usage only on its interactive /usage screen; in print
+    mode "/usage" is sent to the model as a prompt, so the quota is never read and the level stays unknown."""
+    out = {"vendor": "cursor", "status": "unavailable", "source": "cursor-agent status/about", "plan": None,
+           "windows": [], "notes": []}
+    try:
+        st = cursor_json("status")
+        if not st.get("isAuthenticated"):
+            out["notes"].append("cursor-agent is not signed in; run `cursor-agent login`")
+            return out
+        out["plan"] = (cursor_json("about").get("subscriptionTier") or "").lower() or None
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as e:
+        out["notes"].append(f"cursor-agent query failed: {e}")
+        return out
+    out["notes"].append("signed in; cursor-agent has no non-interactive usage readout, so the quota was not read")
+    return out
+
+
 # ---------------------------------------------------------------- advice
 
+VENDORS = ("claude", "codex", "gemini", "cursor")
 LEVEL_RANK = {"green": 0, "yellow": 1, "red": 2, None: 1}  # unknown counts as yellow
 
 
 def advise(vendors):
-    c, x = vendors.get("claude"), vendors.get("codex")
-    lc = c.get("level") if c and c["status"] in ("ok", "stale") else None
-    lx = x.get("level") if x and x["status"] in ("ok", "stale") else None
+    levels = {v: (vendors[v].get("level") if vendors[v]["status"] in ("ok", "stale") else None)
+              for v in VENDORS if v in vendors}
     notes = []
-    for v, lvl in (("claude", lc), ("codex", lx)):
-        if v not in vendors:
-            continue
+    for v, lvl in levels.items():
         vd = vendors[v]
         b = vd.get("binding")
         if lvl is None:
@@ -411,23 +497,30 @@ def advise(vendors):
                 "green": f"{v} green"}.get(lvl, f"{v} quota unknown: treat as yellow")
         return {v: lvl or "unknown", "prefer": "n/a",
                 "rule": rule + "; run without --vendor for a routing preference", "notes": notes}
-    rc, rx = LEVEL_RANK[lc], LEVEL_RANK[lx]
-    if lc == "red" and lx == "red":
-        prefer, rule = "neither", "both vendors red: stop launching new work and tell the user"
-    elif lc is None and lx is None:
-        prefer, rule = "either", "quota unknown for both vendors: route by fit, say so in the record, and re-run usage before large launches"
-    elif rc == rx:
+    lv = list(levels.values())
+    best = min(LEVEL_RANK[l] for l in lv)
+    greenest = [v for v, l in levels.items() if LEVEL_RANK[l] == best]
+    if all(l == "red" for l in lv):
+        prefer, rule = "neither", "every vendor red: stop launching new work and tell the user"
+    elif all(l is None for l in lv):
+        prefer, rule = "either", "quota unknown for every vendor: route by fit, say so in the record, and re-run usage before large launches"
+    elif len(greenest) == len(levels):
         prefer, rule = "either", "route by fit alone"
-    elif rc < rx:
-        prefer, rule = "claude", "fit first; when the table lists both vendors as suitable, pick the Claude model"
     else:
-        prefer, rule = "codex", "fit first; when the table lists both vendors as suitable, pick the Codex model"
-    return {"claude": lc or "unknown", "codex": lx or "unknown", "prefer": prefer, "rule": rule, "notes": notes}
+        prefer = "+".join(greenest)
+        names = " or ".join(v.capitalize() for v in greenest)
+        reds = [v for v, l in levels.items() if l == "red"]
+        rule = f"fit first; where the table lists several vendors as suitable, pick the {names} model"
+        if reds:
+            rule += f"; no new work on {', '.join(reds)}"
+    res = {v: (l or "unknown") for v, l in levels.items()}
+    res.update({"prefer": prefer, "rule": rule, "notes": notes})
+    return res
 
 
 def text_report(snap):
     lines = [f"usage snapshot {snap['generated_at']}" + (" (cached)" if snap.get("from_cache") else "")]
-    for v in ("claude", "codex"):
+    for v in VENDORS:
         d = snap["vendors"].get(v)
         if not d:
             continue
@@ -445,14 +538,14 @@ def text_report(snap):
         for n in d.get("notes", []):
             lines.append(f"   note: {n}")
     a = snap["advice"]
-    levels = " ".join(f"{v}={a[v]}" for v in ("claude", "codex") if v in a)
+    levels = " ".join(f"{v}={a[v]}" for v in VENDORS if v in a)
     lines.append(f"advice: {levels} prefer={a['prefer']} -> {a['rule']}")
     return "\n".join(lines)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--vendor", choices=["claude", "codex", "all"], default="all")
+    ap.add_argument("--vendor", choices=[*VENDORS, "all"], default="all")
     ap.add_argument("--text", action="store_true", help="human summary instead of JSON")
     ap.add_argument("--no-refresh", action="store_true", help="do not spend a Haiku call to refresh an expired Claude token")
     ap.add_argument("--no-cache", action="store_true", help="always query live")
@@ -476,6 +569,10 @@ def main():
             vendors["claude"] = read_claude(allow_refresh=not args.no_refresh)
         if args.vendor in ("codex", "all"):
             vendors["codex"] = read_codex()
+        if args.vendor in ("gemini", "all"):
+            vendors["gemini"] = read_gemini()
+        if args.vendor in ("cursor", "all"):
+            vendors["cursor"] = read_cursor()
         snap = {"generated_at": iso(now_utc()), "generated_epoch": time.time(), "vendors": vendors, "advice": advise(vendors)}
         if args.vendor == "all":
             try:
