@@ -84,19 +84,22 @@ same holds for Gemini's AI credits (`credits.balance`).
 
 Fit decides first; budget decides among the fits. Concretely:
 
-1. **Both green:** route by the fit table alone.
-2. **A vendor yellow:** for rows where the table lists several vendors as suitable (routine
-   implementation, terminal-heavy runs, research, mechanical work), pick the greenest vendor's
-   model (`prefer`). High-consequence rows (architecture, hard root cause, security, migration)
-   keep their first choice regardless.
-3. **A vendor red:** launch no new *work* on it; use another vendor wherever the table allows,
-   including the cross-check table's alternative checker. Where only the red vendor fits (for
-   example a build run when only Claude can run it), tell the user and wait rather than quietly
-   downgrading to a model the table forbids.
+Every row of the routing and cross-check tables ranks all vendors, so budget decides how far
+down a row to go:
+
+1. **All green:** take the first model in the row.
+2. **A vendor yellow:** where its model and a greener vendor's sit close together in the row
+   (routine implementation, terminal-heavy runs, research, mechanical work), take the greener one
+   (`prefer`). High-consequence rows (architecture, hard root cause, security, migration) keep
+   their first choice unless it is red.
+3. **A vendor red:** launch no new *work* on it; take the next model in the row from another
+   vendor. If that model is clearly weaker for high-consequence work, say so in the record, and
+   ask the user when the gap is large. If the next model's tool cannot run a step the work needs
+   (Gemini and Cursor run only allowlisted commands), give that step to another agent.
 4. **Cross-checks are never skipped for budget.** They are small relative to the work. On a
-   yellow or red vendor use the cheapest checker the cross-check table permits (Sol instead of
-   Astra for ordinary code, Haiku/Luna/Flash for number re-derivation) or its alternative vendor,
-   never a same-vendor checker.
+   yellow or red vendor take the next checker in the row, or the vendor's cheaper model where the
+   work is ordinary (Sol instead of Astra for ordinary code; Haiku, Luna, Flash or Composer for
+   number re-derivation), never a same-vendor checker.
 5. **All red:** stop launching, report the snapshot and the reset times, and wait for the user.
 6. **Unknown (unavailable):** treat as yellow and say in the record that the quota was not read.
 7. Pace matters more than the raw percentage early in a window: 40 % used with a day gone of a

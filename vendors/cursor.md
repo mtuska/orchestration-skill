@@ -12,19 +12,24 @@ Call the CLI as `cursor-agent`. On this machine `agent` on the PATH is Grok's ow
 
 ## What it can do in this harness
 
+Every kind of work: reading, review, planning, editing and implementation. Setup facts:
+
 - **Read-only is enforced by mode.** `--mode ask` (questions, read-only) and `--mode plan`
   (planning, no edits) are the CLI's read-only modes. Seen on 2026-11-02: both Grok 4.7 and
   Composer 2.5 answered a file question correctly in `ask` mode with the workspace unchanged.
-- **Commands follow the user's allowlist.** Print mode (`-p`) has write and shell tools, but a
-  command not on the allowlist in `~/.cursor/cli-config.json` is rejected (the allowlist there held
-  only `Shell(ls)` on 2026-11-02). `--force` / `--yolo` runs every command; do not use it without
-  the user's say-so, and do not edit the allowlist.
+- **Edits work in the default mode.** Without `--mode`, print mode (`-p`) has write and shell tools.
+- **Commands follow the user's allowlist.** A command not on the allowlist in
+  `~/.cursor/cli-config.json` is rejected (the allowlist there held only `Shell(ls)` on
+  2026-11-02), so builds and tests for Cursor's work are run by the checker or by you until the user
+  allows them. `--force` / `--yolo` runs every command; do not use it without the user's say-so,
+  and do not edit the allowlist.
 - **A rejected command still reports success.** Seen on 2026-11-02: asked to run `wc -l`, the
   command was rejected, the run ended `is_error: false` with exit 0, and the model wrote what the
   output "would" be. Never accept a command result from Cursor without the log line that shows it
   ran; treat it as unverified otherwise.
-- **Prompt injection:** see the Gray Swan note in `../BENCHMARKS.md`. Do not hand Grok untrusted
-  content.
+- **Prompt injection:** Grok 4.6's Gray Swan score is weak (`../BENCHMARKS.md`). When Grok works on
+  untrusted content (web pages, outside issue text or logs), have its result checked with that in
+  mind.
 
 ## How to launch
 

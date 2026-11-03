@@ -8,13 +8,18 @@ only `gemini-*` model IDs.
 
 ## What it can do in this harness
 
-- **No terminal commands by default.** `agy` in headless mode auto-denies every command that no
-  allow rule in its `settings.json` (`permissions.allow`) covers; the bridge then fails the run
-  with `denied_actions`. Seen on 2026-11-02: a question that the model chose to answer with a
-  command was denied and returned nothing. So Gemini cannot build, run tests or collect results
-  unless the user has added allow rules. Adding them is the user's configuration; do not edit it.
-- **File edits are auto-accepted.** The bridge always runs `agy` in `accept-edits` mode. "Do not
-  modify files" is an instruction in the brief, not a restriction.
+Every kind of work: reading, review, planning, editing and implementation. Setup facts:
+
+- **Commands run only if allowed.** `agy` in headless mode auto-denies every command that no allow
+  rule in its `settings.json` (`~/.gemini/antigravity-cli/settings.json`, `permissions.allow`)
+  covers, and the bridge then fails the run with `denied_actions`. Seen on 2026-11-02: a question
+  the model chose to answer with a command was denied and returned nothing. On 2026-11-02 that file
+  held no allow rules, so builds and tests for Gemini's work are run by the checker or by you until
+  the user adds rules for the commands it needs. Adding them is the user's configuration; do not
+  edit it yourself.
+- **File edits are auto-accepted.** The bridge always runs `agy` in `accept-edits` mode, so
+  implementation works without approval prompts. The other side: "do not modify files" is only an
+  instruction in the brief, so for read-only work check the workspace after the run.
 - **It reads files itself** from the `--cwd` workspace; give it paths, not pasted content.
 
 ## How to launch
@@ -39,8 +44,8 @@ node "$B" --cwd <workdir> --model gemini-4-argon-high --format json --timeout 90
 - For read-only work, capture `git status --porcelain` and `git diff --stat` (or a checksum list
   outside Git) before launch and compare after. Any change made by a checker fails the check;
   report it, do not keep it.
-- Phrase the brief so the answer needs only file reads, and say "do not run terminal commands"
-  unless commands are allowed in `agy`; otherwise the model may reach for one and the run fails.
+- Say in the brief which commands it may run. A command that is not allowed fails the whole run,
+  so while none are allowed, ask it to edit and read only and say who will build and test.
 - The plugin also provides the Agent tool type `cc-gemini-plugin:gemini-agent` (a Claude wrapper
   with Bash, Glob and Read that runs the same bridge) and the `/cc-gemini-plugin:gemini` command.
   The wrapper works (smoke test 2026-11-02: exit 0, `ok: true`, correct answer), but its report

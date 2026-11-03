@@ -56,8 +56,8 @@ Same source.
 - **Prompt injection:** Gray Swan IPI (15 attempts): Argon 0.7, Fable 5.1 1, Opus 5.5 1, Flash 5.5,
   Astra 8.5, Sol 10.1, Grok 4.6 51.8. BenchLM does not state the unit or direction; if it is the
   attack success rate, as the benchmark name suggests, Grok 4.6 is far easier to hijack than the
-  rest. Do not feed Grok untrusted content (web pages, issue text, logs from outside) until a
-  Grok 4.7 figure says otherwise.
+  rest. Check Grok's work on untrusted content (web pages, issue text, logs from outside) with that
+  in mind until a Grok 4.7 figure says otherwise.
 - **Independent index:** Epoch Capabilities Index (CC BY 4.0, not vendor-reported): Opus 5.5
   168.8, Astra 168.8, Fable 5.1 166.5, Sonnet 5.5 166.2, Sol 163.7, Haiku 5.5 159.3, Luna 156.8,
   Grok 4.6 156.6, Grok 4.7 154.4. No Gemini or Composer model here has an ECI score yet.
@@ -66,7 +66,7 @@ Same source.
 
 - Gemini 3.8 Flash's scores disagree with each other (DeepSWE 73.8 against Terminal-Bench 4.0 19.1
   and FrontierSWE v2 19.6). Grok 4.7 shows the same pattern (DeepSWE 71.0 against FrontierSWE v2
-  29.5). Do not route agentic coding to either on the strength of DeepSWE.
+  29.5). Do not rank either higher for agentic coding on the strength of DeepSWE alone.
 - Gemini 4 Argon's agentic rank is an estimate with no direct agentic source; its coding rank rests
   on one source family. It is five weeks old (released 2026-09-30).
 - Grok 4.7 (released 2026-09-21) and Composer 2.5 (2026-05-18) have no BenchLM ranking. Composer's

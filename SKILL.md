@@ -34,10 +34,13 @@ Vendor is the model's maker, not the tool that runs it. `agy` and Cursor also se
 models; use each tool only for its own vendor's models, and never count a run of another maker's
 model through them as a check by that tool's vendor.
 
-**Read the vendor's file before launching one of its models**: each says what the model can and
-cannot do here (Gemini cannot run commands; Cursor reports success when a command was refused),
-the exact launch command, and how to read the result. `BENCHMARKS.md` holds the evidence behind
-the tables below; read it when a routing choice is close or contested.
+**Every vendor can do every kind of work** (read, review, plan, edit, implement, run things) and
+can check any other vendor's work. They differ in how well, which is what the rankings below and
+`BENCHMARKS.md` are for, and in what their tool needs set up first. **Read the vendor's file before
+launching one of its models**: it gives the launch command, how to read the result, and the setup
+facts (Gemini and Cursor run only the commands their allowlists permit; Cursor reports success
+even when a command was refused). `BENCHMARKS.md` holds the evidence behind the rankings; read it
+when a choice is close or contested.
 
 ## Before routing: read the quota
 
@@ -48,16 +51,17 @@ At the start of an orchestration, and before any launch that will burn a lot of 
 ```
 
 It gives each vendor a level (green, yellow, red, unknown) and an `advice` line. Cursor's quota
-cannot be read and is always unknown. Fit decides first; the levels decide among the fits:
+cannot be read and is always unknown. Fit decides first; the levels decide how far down a ranking
+to go:
 
-- All green: route by the tables alone.
-- A vendor yellow or unknown: where a row lists several vendors as suitable, pick the greenest
-  (`prefer` names it, or several joined with `+`). High-consequence rows keep their first choice.
-- A vendor red: no new work on it; use another the tables allow, including the cross-check
-  alternatives. Where only that vendor fits, ask the user instead of routing down to a model the
-  table forbids.
-- Cross-checks are never skipped for budget; use the cheapest checker the table allows, on the
-  greenest permitted vendor.
+- All green: take the first model in the row.
+- A vendor yellow or unknown: where its model and a greener vendor's are close in the row (next to
+  each other, or the row says they are close), take the greener one (`prefer` names it, or several
+  joined with `+`). High-consequence rows keep their first choice unless it is red.
+- A vendor red: no new work on it; take the next model in the row from another vendor. When that
+  means a clearly weaker model for high-consequence work, say so in the record, and ask the user
+  if the gap is large.
+- Cross-checks are never skipped for budget; take the next checker in the row on a greener vendor.
 - All red: stop launching and report the snapshot and reset times.
 - If the script could not read a vendor, say so in the record.
 
@@ -65,63 +69,61 @@ Details, thresholds and account shapes: `USAGE.md`.
 
 ## Which model for which task
 
-Judgement informed by `BENCHMARKS.md`, not proven by it. Route by the hardest and most
-consequential part of the task, not its length.
+Judgement informed by `BENCHMARKS.md`, not proven by it. Each row ranks the best model of every
+vendor for that kind of work, best first; a later model is a fallback, not a forbidden choice.
+Route by the hardest and most consequential part of the task, not its length.
 
-| Task kind | First choice | Also suitable | Notes |
-|---|---|---|---|
-| Architecture, design, plans that set direction | Fable 5.1 | Astra, Opus 5.5, Argon | High consequence; spend on the strongest model |
-| Hard root cause, ambiguous bugs, concurrency, persistence, lifecycle ordering | Opus 5.5 or Fable 5.1 | Astra | Do not route these down because the diff is small. Not Gemini or Cursor as the worker: diagnosis needs to run things |
-| Security review, auth, input validation, anything security-sensitive (even small diffs) | Astra | Argon, Opus 5.5 / Fable 5.1 | Never Haiku, Luna, Flash or a Cursor model |
-| Migration, rollback, data conversion, schema/wire changes | Opus 5.5 | Astra | Requires a rehearsal or test plan |
-| Complex implementation, large refactors | Opus 5.5 | Sol, Argon | Argon only where someone else runs the build and tests afterwards |
-| Routine implementation, local fixes | Sonnet 5.5 | Sol, Grok 4.7 | Grok only where someone else runs the build and tests afterwards |
-| Terminal-heavy runs: builds, test suites, benchmark runs, collecting results | Sonnet 5.5 | Sol | Sonnet leads Terminal-Bench 4.0. Never Gemini or Cursor unless the user has allowed the commands in that tool |
-| Reading very long inputs: whole subsystems, long logs or traces, cross-file consistency | Argon | Astra, Opus 5.5 | Argon leads GraphWalks 256K-1M; give it paths and a precise question |
-| Experiment design, statistics, interpreting benchmark or A/B results, causal claims | Opus 5.5 | Astra | Not arithmetic; needs reasoning about noise and confounds |
-| UI and visual QA that drives the app (clicks, screenshots, layout) | Sonnet 5.5 or Opus 5.5 | Sol | Requires the tools to see the UI; say if they cannot |
-| Reading static images, charts, video or scanned documents | Argon | Opus 5.5, Sonnet 5.5 | Argon leads no-tools chart and video reading; Claude with tools is stronger on charts |
-| Extracting fields from documents into structure | Sol | Luna, Flash | Sol and Luna lead ExtractBench |
-| Mechanical: extracting numbers from logs, file inventories, renames, simple summaries | Haiku 5.5 | Luna, Flash, Composer 2.5 | Only when the task truly has no judgement in it. Flash and Composer only on files they can read, never for commands |
-| Research and source lookup | Sonnet 5.5 | Sol | Require cited primary sources and versions. Not Grok: it handles untrusted content badly |
-| Adversarial review of a finished change | See the cross-check table | | |
+| Task kind | Ranked fit, best first | Notes |
+|---|---|---|
+| Architecture, design, plans that set direction | Fable 5.1 (or Opus 5.5), Astra, Argon, Grok 4.7 | High consequence; spend on the strongest model available |
+| Hard root cause, ambiguous bugs, concurrency, persistence, lifecycle ordering | Opus 5.5 or Fable 5.1, Astra, Argon, Grok 4.7 | Do not route these down because the diff is small. Diagnosis usually runs repros: with Gemini or Cursor, allow the commands or have another agent run them |
+| Security review, auth, input validation, anything security-sensitive (even small diffs) | Astra, Argon, Opus 5.5 or Fable 5.1, Grok 4.7 | Astra and Argon lead SEC-Bench Pro and ExploitGym. Use a vendor's strongest model here, not its small one |
+| Migration, rollback, data conversion, schema/wire changes | Opus 5.5, Astra, Argon, Grok 4.7 | Requires a rehearsal or test plan |
+| Complex implementation, large refactors | Opus 5.5, Astra or Sol, Argon, Grok 4.7 | Argon leads DeepSWE. Whoever cannot run the build and tests hands them to the checker |
+| Routine implementation, local fixes | Sonnet 5.5, Sol, Argon, Grok 4.7 or Composer 2.5 | Same note on builds and tests |
+| Terminal-heavy runs: builds, test suites, benchmark runs, collecting results | Sonnet 5.5, Sol or Astra, Argon, Grok 4.7 | Sonnet leads Terminal-Bench 4.0 (70.6); Astra 57.9, Argon 57.4, Grok 4.7 38.0. Gemini and Cursor need the commands on their allowlists first |
+| Reading very long inputs: whole subsystems, long logs or traces, cross-file consistency | Argon, Astra, Opus 5.5, Grok 4.7 | Argon leads GraphWalks 256K-1M; give it paths and a precise question. Grok's window is 500K |
+| Experiment design, statistics, interpreting benchmark or A/B results, causal claims | Opus 5.5, Astra, Argon, Grok 4.7 | Not arithmetic; needs reasoning about noise and confounds |
+| UI and visual QA that drives the app (clicks, screenshots, layout) | Sonnet 5.5 or Opus 5.5, Astra, Argon, Grok 4.7 | Requires the tools to see the UI; say if they cannot. No computer-use score for Grok |
+| Reading static images, charts, video or scanned documents | Argon, Opus 5.5 or Sonnet 5.5, Astra, Grok 4.7 | Argon leads no-tools chart and video reading; Claude with tools is stronger on charts. No vision score for Grok |
+| Extracting fields from documents into structure | Sol or Luna, Opus 5.5, Flash, Composer 2.5 | Sol and Luna lead ExtractBench |
+| Mechanical: extracting numbers from logs, file inventories, renames, simple summaries | Haiku 5.5, Luna, Flash, Composer 2.5 | Use the small models only when the task truly has no judgement in it |
+| Research and source lookup | Sonnet 5.5, Sol, Argon, Grok 4.7 | Require cited primary sources and versions. Grok 4.6's prompt-injection score is weak (`BENCHMARKS.md`); check what Grok read |
+| Adversarial review of a finished change | See the cross-check table | |
 
 Effort: for high-consequence work use the model's high or xhigh effort (Gemini and Grok: the
 `-high` or `-xhigh` model ID); for mechanical work the default is enough.
 
 ## Who checks what
 
-The checker is always a different vendor from the worker. The first choice is listed first; use
-the alternatives in order when the first vendor is red, unavailable, or the row says it fits better.
+The checker is always a different vendor from the worker. Each row ranks the other three vendors'
+best checker for that kind of work, best first; take the first that is not red.
 
-| Work done by | Kind of work | Cross-check with | Alternatives |
-|---|---|---|---|
-| Claude | Code, fixes | Codex Sol; Astra if security, concurrency, persistence, migration or wide impact | Gemini Argon; Grok 4.7 for small, low-risk local diffs |
-| Claude | Plan, design, architecture, diagnosis | Codex Astra | Gemini Argon |
-| Claude | Long-input or cross-file consistency claims, image or video reading | Gemini Argon | Codex Astra |
-| Claude | Measurement or run report (numbers only) | Codex Luna re-derives the numbers from the raw logs | Gemini Flash or Composer 2.5, reading the log files |
-| Claude | Analysis or interpretation of results | Codex Astra | Gemini Argon |
-| Codex | Code, fixes | Claude Opus 5.5 (Sonnet 5.5 for small, low-risk local diffs; never for security-sensitive ones) | Gemini Argon; Grok 4.7 for small, low-risk local diffs |
-| Codex | Plan, design, architecture, diagnosis | Claude Fable 5.1 or Opus 5.5 | Gemini Argon |
-| Codex | Measurement or run report (numbers only) | Claude Haiku 5.5 or Sonnet 5.5 re-derive the numbers | Gemini Flash or Composer 2.5 |
-| Codex | Analysis or interpretation of results | Claude Opus 5.5 | Gemini Argon |
-| Gemini | Code, fixes | Claude Opus 5.5, which also runs the build and tests Gemini could not | Codex Sol (Astra if security-sensitive) |
-| Gemini | Plan, design, architecture, diagnosis, long-input reading | Claude Fable 5.1 or Opus 5.5 | Codex Astra |
-| Gemini | Measurement or extraction (numbers only) | Claude Haiku 5.5 | Codex Luna; Composer 2.5 |
-| Gemini | Analysis or interpretation of results | Claude Opus 5.5 | Codex Astra |
-| Cursor | Code, fixes | Claude Sonnet 5.5 (Opus 5.5 if the change is not small), which also runs the build and tests | Codex Sol; Gemini Argon |
-| Cursor | Measurement or extraction (numbers only) | Claude Haiku 5.5 | Codex Luna; Gemini Flash |
-| Cursor | Anything else | Claude Opus 5.5 | Codex Astra; Gemini Argon |
+| Work done by | Kind of work | Checkers, best first |
+|---|---|---|
+| Claude | Code, fixes | Codex Sol (Astra if security, concurrency, persistence, migration or wide impact), Gemini Argon, Cursor Grok 4.7 |
+| Claude | Plan, design, architecture, diagnosis, analysis of results | Codex Astra, Gemini Argon, Cursor Grok 4.7 |
+| Claude | Long-input or cross-file consistency claims, image or video reading | Gemini Argon, Codex Astra, Cursor Grok 4.7 |
+| Claude | Measurement or run report (numbers only) | Codex Luna, Gemini Flash, Cursor Composer 2.5, each re-deriving the numbers from the raw logs |
+| Codex | Code, fixes | Claude Opus 5.5 (Sonnet 5.5 for small, low-risk local diffs), Gemini Argon, Cursor Grok 4.7 |
+| Codex | Plan, design, architecture, diagnosis, analysis of results | Claude Fable 5.1 or Opus 5.5, Gemini Argon, Cursor Grok 4.7 |
+| Codex | Measurement or run report (numbers only) | Claude Haiku 5.5, Gemini Flash, Cursor Composer 2.5 |
+| Gemini | Code, fixes | Claude Opus 5.5, Codex Sol (Astra if security-sensitive), Cursor Grok 4.7 |
+| Gemini | Plan, design, architecture, diagnosis, long-input reading, analysis | Claude Fable 5.1 or Opus 5.5, Codex Astra, Cursor Grok 4.7 |
+| Gemini | Measurement or extraction (numbers only) | Claude Haiku 5.5, Codex Luna, Cursor Composer 2.5 |
+| Cursor | Code, fixes | Claude Sonnet 5.5 (Opus 5.5 if the change is not small), Codex Sol, Gemini Argon |
+| Cursor | Plan, design, architecture, diagnosis, analysis | Claude Opus 5.5, Codex Astra, Gemini Argon |
+| Cursor | Measurement or extraction (numbers only) | Claude Haiku 5.5, Codex Luna, Gemini Flash |
 
-Gemini as checker: Argon only, except Flash for re-deriving numbers from files. Cursor as checker:
-Grok 4.7 only for small, low-risk local diffs, Composer 2.5 only for re-deriving numbers; never for
-plans, designs, diagnoses, security or anything with wide impact. A Gemini or Cursor check that
-needed to run something (a test, a repro) cannot run it; the checker must say so, and that part
-stays unverified until another vendor or you run it.
+For security-sensitive or high-impact work, use the checker vendor's strongest model (Astra, Opus
+5.5 or Fable 5.1, Argon, Grok 4.7 xhigh), not its small one. A check that needs to run something (a
+test, a repro) needs the commands allowed for that checker; if they are not, the checker says what
+it could not run, and that part stays unverified until it is run by someone.
 
 Proportionality: every substantive change, plan or conclusion gets one check. A pure data run
 (build, benchmark run) is not repeated; its interpretation is checked from the raw logs.
-Checkers are read-only and never edit; for Gemini and Cursor, check the workspace is unchanged
+A checker does not edit the work it checks; launch it read-only where the tool allows (Codex
+`-s read-only`, Cursor `--mode ask`), and for Gemini and Cursor confirm the workspace is unchanged
 after the run (the vendor files say how).
 
 ## How to brief any subagent
@@ -141,8 +143,8 @@ Write the brief to a file and pass it. A good brief has:
 A cross-check brief adds: the original task brief, the produced diff or document (paths), the
 acceptance criteria, and the instruction to report findings ranked by severity, each with
 file:line evidence and "confirmed" or "suspected", to state what it could not inspect, and to say
-plainly when it finds nothing. A Gemini or Cursor brief also says what it must not run and that it
-must not edit, and asks for the answer on its own line.
+plainly when it finds nothing. A Gemini or Cursor brief also says which commands it may run (only
+those on its allowlist will work), and asks for the answer on its own line.
 
 ## Orchestrator duties that stay with you
 
