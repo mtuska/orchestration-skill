@@ -7,18 +7,24 @@ Companion to the orchestration skill. Read-only, stdlib only.
   usage --text          # short human summary
   usage --vendor codex  # one vendor
   usage --no-refresh    # never spend a Haiku call to refresh an expired Claude token
-  usage --no-cache      # ignore the 60s cache
+  usage --no-cache      # bypass the 15-minute cache
 
 Exit 0 when at least one vendor was read; 2 when none could be read.
 """
 import argparse
 import datetime as dt
+import fcntl
 import glob
 import json
 import os
+import pty
+import re
 import select
+import signal
+import struct
 import subprocess
 import sys
+import termios
 import time
 import urllib.error
 import urllib.request
@@ -26,6 +32,10 @@ import urllib.request
 HOME = os.path.expanduser("~")
 CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.join(HOME, ".cache")), "orchestration-usage")
 CACHE_FILE = os.path.join(CACHE_DIR, "last.json")
+CACHE_LOCK = os.path.join(CACHE_DIR, "last.lock")
+CACHE_TTL = 15 * 60
+FAILURE_TTL = 60
+CACHE_VERSION = 2
 CLAUDE_CREDS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(HOME, ".claude")), ".credentials.json")
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.join(HOME, ".codex"))
@@ -116,7 +126,7 @@ def binding(windows):
         return None
     b = max(cands, key=lambda w: w["percent"])
     return {"id": b["id"], "label": b["label"], "percent": b["percent"], "headroom_percent": round(100 - b["percent"], 1),
-            "resets_in": b.get("resets_in")}
+            "resets_in": b.get("resets_in"), "reset_label": b.get("reset_label")}
 
 
 # ---------------------------------------------------------------- Claude
@@ -170,6 +180,7 @@ def read_claude(allow_refresh):
         return out
 
     windows = []
+    shared_windows = []
     hard_stop = False
     limits = data.get("limits")
     if isinstance(limits, list) and limits:
@@ -183,23 +194,39 @@ def read_claude(allow_refresh):
             wid = kind if kind != "weekly_scoped" else f"weekly_{(scope.get('display_name') or i).__str__().lower()}"
             windows.append(window(wid, label, lim.get("percent"), parse_ts(lim.get("resets_at")), dur,
                                   active=lim.get("is_active"), extra={"severity": lim.get("severity")}))
-            if lim.get("severity") in ("exceeded", "critical", "locked"):
-                hard_stop = True
+            scoped = kind == "weekly_scoped" or bool(scope)
+            if scoped:
+                windows[-1]["bucket"] = scope.get("display_name") or wid
+                scoped_level = level_for([windows[-1]], lim.get("severity") in ("exceeded", "critical", "locked"))
+                windows[-1]["level"] = scoped_level
+                if scoped_level in ("yellow", "red"):
+                    out["notes"].append(f"model bucket '{windows[-1]['bucket']}' is {scoped_level}; check eligibility for that model")
+            else:
+                shared_windows.append(windows[-1])
+                if lim.get("severity") in ("exceeded", "critical", "locked"):
+                    hard_stop = True
     else:  # older shape
         for key, label, dur in (("five_hour", "5-hour", 5 * 3600), ("seven_day", "weekly all models", 7 * 86400),
                                 ("seven_day_opus", "weekly Opus", 7 * 86400), ("seven_day_sonnet", "weekly Sonnet", 7 * 86400)):
             v = data.get(key)
             if isinstance(v, dict) and v.get("utilization") is not None:
                 windows.append(window(key, label, v["utilization"], parse_ts(v.get("resets_at")), dur))
-                if v.get("locked_reason"):
-                    hard_stop = True
+                if key in ("seven_day_opus", "seven_day_sonnet"):
+                    windows[-1]["bucket"] = key
+                    windows[-1]["level"] = level_for([windows[-1]], bool(v.get("locked_reason")))
+                    if windows[-1]["level"] in ("yellow", "red"):
+                        out["notes"].append(f"model bucket '{key}' is {windows[-1]['level']}; check eligibility for that model")
+                else:
+                    shared_windows.append(windows[-1])
+                    if v.get("locked_reason"):
+                        hard_stop = True
     xu = data.get("extra_usage") or {}
     out["extra_usage"] = {"enabled": bool(xu.get("is_enabled")), "utilization": xu.get("utilization"),
                           "monthly_limit": xu.get("monthly_limit"), "used_credits": xu.get("used_credits"),
                           "disabled_reason": xu.get("disabled_reason")}
     out["windows"] = windows
-    out["binding"] = binding(windows)
-    out["level"] = level_for(windows, hard_stop)
+    out["binding"] = binding(shared_windows)
+    out["level"] = level_for(shared_windows, hard_stop)
     out["status"] = "ok" if windows else "unavailable"
     if not windows:
         out["notes"].append("usage endpoint returned no limits (API-key or gateway auth has no plan windows)")
@@ -453,9 +480,62 @@ def cursor_json(*args, timeout=30):
     return json.loads(p.stdout)
 
 
+def cursor_usage_screen(timeout=30):
+    """Read Cursor's local /usage command in a PTY; print mode sends it to the model."""
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+    proc = None
+    try:
+        proc = subprocess.Popen(["cursor-agent", "--trust", "--workspace", CACHE_DIR],
+                                stdin=slave, stdout=slave, stderr=slave, cwd=CACHE_DIR,
+                                start_new_session=True)
+        os.close(slave)
+        slave = -1
+        raw = bytearray()
+        sent = confirmed = False
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], min(1, max(0, deadline - time.monotonic())))
+            if not ready:
+                continue
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if len(raw) > 1_000_000:
+                raise RuntimeError("Cursor usage screen produced too much output")
+            screen = raw.decode("utf-8", "replace")
+            if not sent and "Plan, search, build anything" in screen:
+                os.write(master, b"/usage\r")
+                sent = True
+            if sent and not confirmed and "Show plan and on-demand usage" in screen:
+                os.write(master, b"\r")
+                confirmed = True
+            if confirmed and "Esc to close" in screen and "Included" in screen:
+                screen = re.sub(r"\x1b\][^\x07]*(?:\x07|\x1b\\)", "", screen)
+                return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen).replace("\r", "")
+        raise RuntimeError("Cursor /usage did not return a complete screen")
+    finally:
+        if proc is not None:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+        if slave >= 0:
+            os.close(slave)
+        os.close(master)
+
+
 def read_cursor():
-    """Sign-in and plan only. cursor-agent shows usage only on its interactive /usage screen; in print
-    mode "/usage" is sent to the model as a prompt, so the quota is never read and the level stays unknown."""
+    """Read the plan and included usage from Cursor's interactive /usage screen."""
     out = {"vendor": "cursor", "status": "unavailable", "source": "cursor-agent status/about", "plan": None,
            "windows": [], "notes": []}
     try:
@@ -467,7 +547,32 @@ def read_cursor():
     except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as e:
         out["notes"].append(f"cursor-agent query failed: {e}")
         return out
-    out["notes"].append("signed in; cursor-agent has no non-interactive usage readout, so the quota was not read")
+    try:
+        screen = cursor_usage_screen()
+        included = re.search(r"\bIncluded\s+([\d.]+)% used\b", screen)
+        if not included:
+            raise ValueError("included quota was missing from /usage")
+        reset = re.search(r"\bResets\s+([A-Z][a-z]{2}\s+\d{1,2})\b", screen)
+        period = re.search(r"\b(Monthly|Weekly) plan and on-demand usage\b", screen)
+        reset_label = reset.group(1) if reset else None
+        period_name = period.group(1).lower() if period else None
+        w = window("included", f"{period_name} included" if period_name else "included plan",
+                   float(included.group(1)), None, None,
+                   extra={"reset_label": reset_label, "period": period_name})
+        out["windows"] = [w]
+        out["binding"] = binding(out["windows"])
+        out["level"] = level_for(out["windows"])
+        out["status"] = "ok"
+        out["source"] = "cursor-agent interactive /usage"
+        out["categories"] = {name.lower(): float(m.group(1)) for name in ("Auto", "API")
+                             if (m := re.search(rf"\b{name}\s+([\d.]+)% used\b", screen))}
+        if m := re.search(r"\bOn-Demand\s+\$([\d,.]+)\s*/\s*\$([\d,.]+)", screen):
+            out["on_demand"] = {"used": float(m.group(1).replace(",", "")),
+                                "limit": float(m.group(2).replace(",", ""))}
+        if reset_label:
+            out["notes"].append(f"plan resets {reset_label}; Cursor does not show the exact reset time here")
+    except (OSError, RuntimeError, ValueError) as e:
+        out["notes"].append(f"Cursor /usage read failed: {e}")
     return out
 
 
@@ -488,7 +593,9 @@ def advise(vendors):
             notes.append(f"{v}: quota unknown ({'; '.join(vd.get('notes') or ['not read'])}); treat as yellow")
         elif b:
             pace = next((w.get("pace") for w in vd.get("windows", []) if w["id"] == b["id"]), "n/a")
-            notes.append(f"{v}: {lvl}; binding window '{b['label']}' at {b['percent']}% used, resets in {b['resets_in']}, pace {pace}")
+            reset = (f"resets in {b['resets_in']}" if b.get("resets_in") else
+                     f"resets {b['reset_label']}" if b.get("reset_label") else "reset time unknown")
+            notes.append(f"{v}: {lvl}; binding window '{b['label']}' at {b['percent']}% used, {reset}, pace {pace}")
     if len(vendors) == 1:  # --vendor: the other side was not read, so no cross-vendor preference
         (v, vd), = vendors.items()
         lvl = vd.get("level") if vd["status"] in ("ok", "stale") else None
@@ -505,12 +612,12 @@ def advise(vendors):
     elif all(l is None for l in lv):
         prefer, rule = "either", "quota unknown for every vendor: route by fit, say so in the record, and re-run usage before large launches"
     elif len(greenest) == len(levels):
-        prefer, rule = "either", "route by fit alone"
+        prefer, rule = "either", "choose the least expensive suitable model; green is availability, not a reason to upgrade"
     else:
         prefer = "+".join(greenest)
         names = " or ".join(v.capitalize() for v in greenest)
         reds = [v for v, l in levels.items() if l == "red"]
-        rule = f"fit first; where the table lists several vendors as suitable, pick the {names} model"
+        rule = f"choose the least expensive suitable model; among suitable candidates prefer capacity on {names}"
         if reds:
             rule += f"; no new work on {', '.join(reds)}"
     res = {v: (l or "unknown") for v, l in levels.items()}
@@ -525,11 +632,17 @@ def text_report(snap):
         if not d:
             continue
         head = f"{v:6s} {d['status']:11s} plan={d.get('plan')} level={d.get('level', '-')} via {d.get('source')}"
+        head += f"; observed {d.get('observed_at', 'unknown')} (age {d.get('age_seconds', 'unknown')}s)"
         lines.append(head)
         for w in d.get("windows", []):
             pct = "  -- " if w["percent"] is None else f"{w['percent']:5.1f}%"
             exp = f" (expected {w['expected_percent_now']}%, {w['pace']})" if w.get("expected_percent_now") is not None else ""
-            lines.append(f"   {w['label']:<22s}{pct}  resets in {w['resets_in']}{exp}")
+            reset = (f"resets in {w['resets_in']}" if w.get("resets_in") else
+                     f"resets {w['reset_label']}" if w.get("reset_label") else "reset time unknown")
+            lines.append(f"   {w['label']:<22s}{pct}  {reset}{exp}")
+        if d.get("on_demand"):
+            od = d["on_demand"]
+            lines.append(f"   on-demand              ${od['used']:g} / ${od['limit']:g}")
         if d.get("credits") and d["credits"].get("balance") is not None:
             lines.append(f"   credits balance        {d['credits']['balance']:.2f}")
         rc = d.get("reset_credits")
@@ -549,35 +662,66 @@ def main():
     ap.add_argument("--text", action="store_true", help="human summary instead of JSON")
     ap.add_argument("--no-refresh", action="store_true", help="do not spend a Haiku call to refresh an expired Claude token")
     ap.add_argument("--no-cache", action="store_true", help="always query live")
-    ap.add_argument("--cache-ttl", type=int, default=60, help="seconds a previous snapshot is reused (default 60)")
+    ap.add_argument("--cache-ttl", type=int, default=CACHE_TTL, help="seconds a successful vendor read is reused (default 900)")
     args = ap.parse_args()
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
 
-    snap = None
-    if not args.no_cache and args.vendor == "all":
+    def collect(prev):
+        if prev.get("cache_version") != CACHE_VERSION:
+            prev = {}
+        saved = prev.get("vendors", {}) if isinstance(prev.get("vendors"), dict) else {}
+        epochs = prev.get("vendor_epochs", {}) if isinstance(prev.get("vendor_epochs"), dict) else {}
+        now = time.time()
+        vendors = {}
+        cached = []
+        readers = {"claude": lambda: read_claude(allow_refresh=not args.no_refresh),
+                   "codex": read_codex, "gemini": read_gemini, "cursor": read_cursor}
+        for name in VENDORS if args.vendor == "all" else (args.vendor,):
+            old = saved.get(name)
+            fetched = epochs.get(name, prev.get("generated_epoch", 0))
+            ttl = args.cache_ttl if isinstance(old, dict) and old.get("status") == "ok" else FAILURE_TTL
+            reset_passed = any(
+                fetched < parse_ts(w.get("resets_at")).timestamp() <= now
+                for w in (old or {}).get("windows", []) if w.get("resets_at") and parse_ts(w.get("resets_at"))
+            ) if isinstance(old, dict) else False
+            if (not args.no_cache and isinstance(old, dict) and isinstance(fetched, (int, float))
+                    and 0 <= now - fetched < ttl and not reset_passed):
+                vendors[name] = dict(old)
+                cached.append(name)
+            else:
+                vendors[name] = readers[name]()
+                fetched = time.time()
+                saved[name] = dict(vendors[name])
+                epochs[name] = fetched
+            vendors[name]["observed_at"] = iso(dt.datetime.fromtimestamp(fetched, dt.timezone.utc))
+            vendors[name]["age_seconds"] = max(0, round(time.time() - fetched))
+        snap = {"generated_at": iso(now_utc()), "generated_epoch": time.time(),
+                "vendors": vendors, "advice": advise(vendors)}
+        if cached:
+            snap["from_cache"] = True
+            snap["cached_vendors"] = cached
+        return snap, {"cache_version": CACHE_VERSION, "vendors": saved, "vendor_epochs": epochs}
+
+    # Serialize reads as well as writes so simultaneous chats share one live fetch.
+    with open(CACHE_LOCK, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             with open(CACHE_FILE) as f:
                 prev = json.load(f)
-            if time.time() - prev.get("generated_epoch", 0) < args.cache_ttl:
-                snap = prev
-                snap["from_cache"] = True
+            if not isinstance(prev, dict):
+                prev = {}
         except (OSError, ValueError):
-            pass
-    if snap is None:
-        vendors = {}
-        if args.vendor in ("claude", "all"):
-            vendors["claude"] = read_claude(allow_refresh=not args.no_refresh)
-        if args.vendor in ("codex", "all"):
-            vendors["codex"] = read_codex()
-        if args.vendor in ("gemini", "all"):
-            vendors["gemini"] = read_gemini()
-        if args.vendor in ("cursor", "all"):
-            vendors["cursor"] = read_cursor()
-        snap = {"generated_at": iso(now_utc()), "generated_epoch": time.time(), "vendors": vendors, "advice": advise(vendors)}
-        if args.vendor == "all":
+            prev = {}
+        snap, cache = collect(prev)
+        tmp = f"{CACHE_FILE}.{os.getpid()}.tmp"
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(cache, f, indent=1)
+            os.replace(tmp, CACHE_FILE)
+        except OSError:
             try:
-                with open(CACHE_FILE, "w") as f:
-                    json.dump(snap, f, indent=1)
+                os.unlink(tmp)
             except OSError:
                 pass
     print(text_report(snap) if args.text else json.dumps(snap, indent=2))

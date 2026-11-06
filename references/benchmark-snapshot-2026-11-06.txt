@@ -1,0 +1,396 @@
+# Benchmark evidence for model selection
+
+Organized by source, then benchmark. Last structural update: 2026-11-06. Scores, rank scales,
+effort levels and dates are not interchangeable. Use these as candidate-selection evidence;
+acceptance, retries and total cost in our own workflows remain the deciding evidence.
+
+## Source directory
+
+| Source | Evidence type | Useful for | Snapshot |
+|---|---|---|---|
+| [BenchLM](https://benchlm.ai/) | Composite rankings and aggregated results | Broad candidate discovery and task coverage | MCP lookup 2026-11-02; underlying data 2026-10-29, not refreshed |
+| [Artificial Analysis](https://artificialanalysis.ai/models/comparisons/gpt-6-1-terra-medium-vs-gpt-6-1-sol-medium) | Evaluator's own measurements | Same-effort quality, cost and speed comparisons | Fetched 2026-11-06 |
+| [DeepSWE / Datacurve](https://deepswe.datacurve.ai/) | Benchmark operator's leaderboard | Long-horizon coding in a shared agent harness | Fetched 2026-11-06; page labels update 2026-09-22 |
+| OpenAI ([Sol][S-launch], [Terra][T-launch]) | Model-provider evaluations | Revision-specific results and effort comparisons | Checked 2026-11-06 |
+
+BenchLM may repeat results from the other sources; repetition is not independent confirmation.
+`—` means no score was held in the original BenchLM snapshot. `NV` means not verified here, not
+zero or proof that no result exists. Preserve model revisions and benchmark versions exactly.
+Pricing is separated below because token price is not a capability score or subscription multiplier.
+
+## BenchLM
+
+Historical snapshot: BenchAlign v5.8 and recorded results, looked up via MCP on 2026-11-02;
+data as of 2026-10-29. Source attribution may be benchmark-operator or provider-reported, and
+many rows omit effort/harness details. Ranking intervals were flagged unvalidated. Estimated
+rankings are not direct measurements. The 6.1 rows below remain NV for this snapshot.
+
+### BenchAlign rankings
+
+| Model | Overall rank | Coding rank | Agentic rank |
+| --- | --- | --- | --- |
+| Claude Fable 5.1 | 7 | 4 | 2 |
+| Claude Opus 5.5 | 2 | 1 | 1 |
+| Claude Sonnet 5.5 | 6 | 2 | 12 |
+| Claude Haiku 5.5 | 24 | 40 | 22 |
+| GPT-6 Astra | 3 | 5 | 7 |
+| GPT-6 Sol | 11 | 13 | 36 |
+| GPT-6 Luna | 46 | 41 | 45 (agentic estimated) |
+| Gemini 4 Argon | 5 | 6 | 4 (agentic estimated) |
+| Gemini 3.8 Flash | 27 | 19 | 17 |
+| Grok 4.7 (xAI, via Cursor) | not ranked | not ranked | not ranked |
+| Grok 4.6 (xAI, via Cursor) | 22 | 21 | 10 |
+| Composer 2.5 (Cursor) | not ranked | not ranked | not ranked |
+| GPT-6.1 Sol | NV | NV | NV |
+| GPT-6.1 Terra | NV | NV | NV |
+
+### Terminal-Bench 4.0 — BenchLM snapshot
+
+| Model | Recorded score |
+| --- | --- |
+| Claude Fable 5.1 | 55.8 |
+| Claude Opus 5.5 | 66.4 |
+| Claude Sonnet 5.5 | 70.6 |
+| Claude Haiku 5.5 | 39.2 |
+| GPT-6 Astra | 57.9 |
+| GPT-6 Sol | — |
+| GPT-6 Luna | — |
+| Gemini 4 Argon | 57.4 |
+| Gemini 3.8 Flash | 19.1 |
+| Grok 4.7 (xAI, via Cursor) | 38.0 |
+| Grok 4.6 (xAI, via Cursor) | — |
+| Composer 2.5 (Cursor) | — |
+| GPT-6.1 Sol | NV |
+| GPT-6.1 Terra | NV |
+
+### DeepSWE — BenchLM snapshot
+
+| Model | Recorded score |
+| --- | --- |
+| Claude Fable 5.1 | 67.4 |
+| Claude Opus 5.5 | 74.2 |
+| Claude Sonnet 5.5 | 71.0 |
+| Claude Haiku 5.5 | — |
+| GPT-6 Astra | 74.1 |
+| GPT-6 Sol | 68.8 |
+| GPT-6 Luna | 66.6 |
+| Gemini 4 Argon | 77.9 |
+| Gemini 3.8 Flash | 73.8 |
+| Grok 4.7 (xAI, via Cursor) | 71.0 |
+| Grok 4.6 (xAI, via Cursor) | 65.9 |
+| Composer 2.5 (Cursor) | — |
+| GPT-6.1 Sol | NV |
+| GPT-6.1 Terra | NV |
+
+### FrontierSWE v2 — BenchLM snapshot
+
+| Model | Recorded score |
+| --- | --- |
+| Claude Fable 5.1 | 56.3 |
+| Claude Opus 5.5 | 62.3 |
+| Claude Sonnet 5.5 | 61.9 |
+| Claude Haiku 5.5 | 43.8 |
+| GPT-6 Astra | 65.5 |
+| GPT-6 Sol | — |
+| GPT-6 Luna | — |
+| Gemini 4 Argon | 55.0 |
+| Gemini 3.8 Flash | 19.6 |
+| Grok 4.7 (xAI, via Cursor) | 29.5 |
+| Grok 4.6 (xAI, via Cursor) | 25.3 |
+| Composer 2.5 (Cursor) | — |
+| GPT-6.1 Sol | NV |
+| GPT-6.1 Terra | NV |
+
+### OSWorld 2.0 — BenchLM snapshot
+
+| Model | Recorded score |
+| --- | --- |
+| Claude Fable 5.1 | 41.7 |
+| Claude Opus 5.5 | 48.7 |
+| Claude Sonnet 5.5 | — |
+| Claude Haiku 5.5 | — |
+| GPT-6 Astra | 72.6 |
+| GPT-6 Sol | 60.5 |
+| GPT-6 Luna | — |
+| Gemini 4 Argon | 69.2 |
+| Gemini 3.8 Flash | 59.0 |
+| Grok 4.7 (xAI, via Cursor) | — |
+| Grok 4.6 (xAI, via Cursor) | — |
+| Composer 2.5 (Cursor) | — |
+| GPT-6.1 Sol | NV |
+| GPT-6.1 Terra | NV |
+
+### GraphWalks BFS 256K-1M — BenchLM snapshot
+
+| Model | Recorded score |
+| --- | --- |
+| Claude Fable 5.1 | 65.0 |
+| Claude Opus 5.5 | 66.8 |
+| Claude Sonnet 5.5 | — |
+| Claude Haiku 5.5 | — |
+| GPT-6 Astra | 71.8 |
+| GPT-6 Sol | — |
+| GPT-6 Luna | — |
+| Gemini 4 Argon | 84.2 |
+| Gemini 3.8 Flash | — |
+| Grok 4.7 (xAI, via Cursor) | — |
+| Grok 4.6 (xAI, via Cursor) | — |
+| Composer 2.5 (Cursor) | — |
+| GPT-6.1 Sol | NV |
+| GPT-6.1 Terra | NV |
+
+### FrontierMath v2 T4 — BenchLM snapshot
+
+| Model | Recorded score |
+| --- | --- |
+| Claude Fable 5.1 | 87.8 |
+| Claude Opus 5.5 | 95.0 |
+| Claude Sonnet 5.5 | 80.5 |
+| Claude Haiku 5.5 | 46.3 |
+| GPT-6 Astra | 97.6 |
+| GPT-6 Sol | 90.0 |
+| GPT-6 Luna | 56.1 |
+| Gemini 4 Argon | 78.0 |
+| Gemini 3.8 Flash | 22.0 |
+| Grok 4.7 (xAI, via Cursor) | 17.1 |
+| Grok 4.6 (xAI, via Cursor) | 31.7 |
+| Composer 2.5 (Cursor) | — |
+| GPT-6.1 Sol | NV |
+| GPT-6.1 Terra | NV |
+
+### SEC-Bench Pro — BenchLM snapshot
+
+| Model | Recorded score |
+| --- | --- |
+| Claude Fable 5.1 | — |
+| Claude Opus 5.5 | — |
+| Claude Sonnet 5.5 | — |
+| Claude Haiku 5.5 | — |
+| GPT-6 Astra | 85.4 |
+| GPT-6 Sol | 66.3 |
+| GPT-6 Luna | 34.2 |
+| Gemini 4 Argon | 83.4 |
+| Gemini 3.8 Flash | — |
+| Grok 4.7 (xAI, via Cursor) | — |
+| Grok 4.6 (xAI, via Cursor) | — |
+| Composer 2.5 (Cursor) | — |
+| GPT-6.1 Sol | NV |
+| GPT-6.1 Terra | NV |
+
+### Supplementary benchmarks and catalogue observations
+
+These values retain their original source/date; they are not fresh direct-source measurements.
+
+#### Long context
+
+| Recorded observations |
+| --- |
+| Gemini 4 Argon GraphWalks BFS 128K 99.7. GPT-6 Astra MRCR v2 256-512K 100, 512K-1M 96.3 (no other model here has an MRCR v2 score in BenchLM). Grok 4.7's context window is 500K, Composer 2.5's 200K (BenchLM catalogue). |
+
+#### Vision, video, documents
+
+| Recorded observations |
+| --- |
+| Gemini 4 Argon LVBench (long video) 91.7, Gemini 3.8 Flash 87.1; Chartography without tools: Argon 71.6, Opus 5.5 64.4, Sonnet 5.5 61.6, Haiku 5.5 46.4 (with tools Opus 89.0, Sonnet 90.2); ExtractBench (LlamaIndex): Sol 94.6, Luna 91.0, Flash 80.7; ExtractBench Pro: Astra 58, Opus 51, Sonnet 32, Argon 30, Luna 0. |
+
+#### Computer use
+
+| Recorded observations |
+| --- |
+| OSWorld 2.1 Offline: Opus 5.5 87.2, Sonnet 5.5 83.9, Argon 74.7, Haiku 5.5 72.4, Luna 48.9. |
+
+#### SWE-bench Pro
+
+| Recorded observations |
+| --- |
+| Opus 5.5 89.9, Sonnet 5.5 81.3, Fable 5.1 81.2 (this settles the 5.1 figure that was unresolved on 2026-10-17). |
+
+#### CursorBench 4.0 (vendor benchmark, via BenchLM)
+
+| Model | Score |
+| --- | --- |
+| Claude Opus 5.5 | 57.8 |
+| Claude Sonnet 5.5 | 55.5 |
+| Claude Fable 5.1 | 51.8 |
+| Grok 4.7 | 46.3 |
+| Grok 4.6 | 41.4 |
+| Gemini 3.8 Flash | 39.6 |
+| Composer 2.5 | 27.7 |
+
+#### Composer 2.5 — older benchmark versions
+
+| Benchmark | Score |
+| --- | --- |
+| Terminal-Bench 2.0 | 69.3 |
+| CursorBench 3.1 | 63.2 |
+| CursorBench 3.2 | 56.1 |
+
+Terminal-Bench 2.0 is not comparable with 4.0. These were Composer's only other scores in the
+original snapshot, not a claim about current coverage.
+
+#### Bug Hunt Bench
+
+| Recorded observations |
+| --- |
+| Sonnet 5.5 51.3, Astra 45.0, Fable 5.1 43.0, Opus 5.5 41.7, Argon 40.7, Grok 4.7 29.0, Grok 4.6 27.0, Haiku 5.5 21.5, Luna 18.3, Flash 18.0. |
+
+#### Security
+
+| Recorded observations |
+| --- |
+| ExploitGym: Astra 42.4, Argon 39.5, Sol 22.1, Luna 11.6. |
+
+#### Prompt injection
+
+| Recorded observations |
+| --- |
+| Gray Swan IPI (15 attempts): Argon 0.7, Fable 5.1 1, Opus 5.5 1, Flash 5.5, Astra 8.5, Sol 10.1, Grok 4.6 51.8. BenchLM does not state the unit or direction; if it is the attack success rate, as the benchmark name suggests, Grok 4.6 is far easier to hijack than the rest. Check Grok's work on untrusted content (web pages, issue text, logs from outside) with that in mind until a Grok 4.7 figure says otherwise. |
+
+#### Independent index
+
+| Recorded observations |
+| --- |
+| Epoch Capabilities Index (CC BY 4.0, not vendor-reported): Opus 5.5 168.8, Astra 168.8, Fable 5.1 166.5, Sonnet 5.5 166.2, Sol 163.7, Haiku 5.5 159.3, Luna 156.8, Grok 4.6 156.6, Grok 4.7 154.4. No Gemini or Composer model here has an ECI score yet. |
+
+### Snapshot limitations
+
+- Gemini 3.8 Flash's scores disagree with each other (DeepSWE 73.8 against Terminal-Bench 4.0 19.1
+  and FrontierSWE v2 19.6). Grok 4.7 shows the same pattern (DeepSWE 71.0 against FrontierSWE v2
+  29.5). Do not rank either higher for agentic coding on the strength of DeepSWE alone.
+- Gemini 4 Argon's agentic rank is an estimate with no direct agentic source; its coding rank rests
+  on one source family. It is five weeks old (released 2026-09-30).
+- Grok 4.7 (released 2026-09-21) and Composer 2.5 (2026-05-18) have no BenchLM ranking. Composer's
+  evidence is almost all from its maker's own benchmark.
+- Gemini 4 Carbon (released 2026-10-28) ranks first overall on BenchLM but `agy models` did not
+  offer it on this account on 2026-11-02. Do not route to it until it appears there.
+- The original lookup noted GPT-6.1 Sol ranked above GPT-6 Sol, but did not record its exact rank.
+  That rank has not been refreshed. Treat GPT-6.1 Sol and Terra as distinct revisions; see above.
+- Both Gemini prices are introductory and double on the dates shown.
+
+## Artificial Analysis
+
+[Direct comparison](https://artificialanalysis.ai/models/comparisons/gpt-6-1-terra-medium-vs-gpt-6-1-sol-medium),
+fetched 2026-11-06. Both models use **medium effort**. Intelligence Index version **5.0.1**.
+These are AA's measurements; cost and time describe its workload, not predicted local job costs.
+Higher is better for quality metrics; lower is better for cost and time. Other models/efforts are
+not yet populated from this source; do not substitute their BenchLM or provider results here.
+
+| Benchmark / metric | GPT-6.1 Sol (medium) | GPT-6.1 Terra (medium) |
+| --- | --- | --- |
+| Intelligence Index v5.0.1 | 46 | 38 |
+| AA-Briefcase v1.1 | 1360 | 1190 |
+| AutomationBench-AA | 63% | 58% |
+| Terminal-Bench 4.0 | 48% | 32% |
+| FrontierCode 2.0 | 33% | 35% |
+| AA-Omniscience v1.1 | 40 | 27 |
+| GDP.pdf | 30% | 28% |
+| HLE-Diamond | 46% | 31% |
+| CritPt v2 (Hard Subset) | 67% | 56% |
+| Terminal-Bench-Science 0.1 | 37% | 25% |
+| Weighted cost per Intelligence Index task | $0.36 | $0.17 |
+| Time per Intelligence Index task | 4.2 min | 2.6 min |
+
+## DeepSWE / Datacurve
+
+[Operator leaderboard](https://deepswe.datacurve.ai/), fetched 2026-11-06. The rendered page labels
+113 tasks, update 2026-09-22, and offers v1/v1.1 selectors without exposing the selected state in
+the fetched text. Version selection needs confirmation before exact cross-source comparisons.
+All entries below use the operator's mini-swe-agent harness. Preserve the displayed ± values;
+the retrieved table does not specify their confidence level. Selected supported-vendor entries:
+
+| Model as published | Effort | Score as displayed | Average cost/task |
+| --- | --- | --- | --- |
+| gpt-6-astra | xhigh | 74% ±3% | $4.43 |
+| gemini-3.8-flash | high | 74% ±1% | $2.36 |
+| grok-4.6 | medium | 67% ±2% | $3.45 |
+| GPT-6.1 Sol | NV | NV — absent from fetched table | NV |
+| GPT-6.1 Terra | NV | NV — absent from fetched table | NV |
+
+Do not fill the missing 6.1 rows with OpenAI's DeepSWE results: those belong to a different
+source/run. This small selection is not an overall ranking or a full leaderboard export.
+
+## OpenAI provider evaluations
+
+Checked 2026-11-06. Provider-reported evidence, not independent replication. Results quoted as
+deltas remain deltas; do not reconstruct absolute scores using another source's baseline.
+
+### DeepSWE v1.1
+
+| Model | Effort | Result | Source |
+| --- | --- | --- | --- |
+| GPT-6.1 Sol | Comparison text says lower effort than GPT-6 Sol's best; exact level not stated there | 6.4 percentage points above GPT-6 Sol's best; absolute score not verified | [S-launch] |
+
+### AutomationBench 1.0.6
+
+| Model | Effort | Result | Source |
+| --- | --- | --- | --- |
+| GPT-6.1 Sol | Medium | +4.8 points over GPT-6 Sol at medium; +2.2 over Opus 5.5 | [S-launch] |
+
+### OSWorld 2.0 offline, v2026.08.08, partial reward
+
+| Model | Effort | Result | Source |
+| --- | --- | --- | --- |
+| GPT-6.1 Sol | Max | +7 points over GPT-6 Sol; 2.1 points below Astra at max | [S-launch] |
+
+### Internal factual-error evaluation
+
+| Model | Effort | Result | Source |
+| --- | --- | --- | --- |
+| GPT-6.1 Sol | Low | 7.7% of responses contain an error, versus 11.4% for GPT-6 Sol; lower is better | [S-launch] |
+| GPT-6.1 Terra | Low / max | 16.7% / 4.3%; lower is better | [T-launch] |
+
+### Terminal-Bench 4.0
+
+| Model | Effort | Result | Source |
+| --- | --- | --- | --- |
+| GPT-6.1 Terra | Max | 50.3% solved | [T-launch] |
+
+### Agents' Last Exam
+
+| Model | Effort | Result | Source |
+| --- | --- | --- | --- |
+| GPT-6.1 Terra | Medium | +15 points over GPT-5.6 Terra; absolute score not verified | [T-launch] |
+
+The factuality prompts deliberately induce errors; these are not normal-use error rates and
+the model-specific sets are not established as identical. OSWorld 2.0 and 2.1 are different
+benchmarks; Terminal-Bench Science 0.1 is not Terminal-Bench 4.0. No local performance evaluation
+of the 6.1 models was run for this file.
+
+## API pricing reference
+
+Per million tokens; this is separate from benchmark scoring. Historical prices below are kept
+with their original qualifications and require refresh before spending decisions. Neither API
+prices nor benchmark cost/task establish a Codex/Claude subscription quota multiplier.
+
+| Model | Input / output | Source / checked |
+| --- | --- | --- |
+| Claude Fable 5.1 | $10 / $50 | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| Claude Opus 5.5 | $4 / $20 (2026-10-17 lookup) | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| Claude Sonnet 5.5 | $2 / $10 | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| Claude Haiku 5.5 | $0.10 / $0.50 (prompts up to 100K) | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| GPT-6 Astra | $10 / $50 | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| GPT-6 Sol | $2 / $10 | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| GPT-6 Luna | $0.10 / $0.50 | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| Gemini 4 Argon | $2 / $10 until 2026-11-30, then $4 / $20 | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| Gemini 3.8 Flash | $0.75 / $3.75 until 2026-12-31, then $1.50 / $7.50 | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| Grok 4.7 (xAI, via Cursor) | $2 / $6 (prompts under 200K) | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| Grok 4.6 (xAI, via Cursor) | $2 / $6 (prompts under 200K) | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| Composer 2.5 (Cursor) | $0.50 / $2.50 | BenchLM historical lookup 2026-11-02; qualifications in price cell |
+| GPT-6.1 Sol | $2 / $10 | [S-model], 2026-11-06; cached input $0.10 |
+| GPT-6.1 Terra | $1 / $5 | [T-model], 2026-11-06; cached input $0.05 |
+
+## Maintenance and routing use
+
+Add each result under its source and benchmark, with exact model revision, effort, score/unit,
+harness or split when known, source URL, and fetch/data dates. Mark unknowns explicitly. Keep
+historical observations labeled instead of silently replacing them with incomparable newer runs.
+
+Compare suitable models within a single source/version/effort before using another source as a
+cross-check. A composite rank is not a probability of success. Treat conflicting results as a
+reason for a small representative local trial, not permission to average incompatible scores.
+Do not update routing defaults automatically from this document.
+
+[S-launch]: https://openai.com/index/introducing-gpt-6-1-sol/ "OpenAI: Introducing GPT-6.1 Sol"
+[T-launch]: https://openai.com/index/introducing-gpt-6-1-terra/ "OpenAI: Introducing GPT-6.1 Terra"
+[S-model]: https://developers.openai.com/api/docs/models/gpt-6.1-sol "OpenAI API: GPT-6.1 Sol"
+[T-model]: https://developers.openai.com/api/docs/models/gpt-6.1-terra "OpenAI API: GPT-6.1 Terra"

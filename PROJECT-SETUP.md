@@ -1,11 +1,14 @@
 # Per-project command setup for Gemini and Cursor
 
+These native-CLI setup notes complement the vendor launch instructions. Command allowlists alone
+do not enforce read-only filesystem access. Configure only the access authorized for the current assignment.
+
 Claude agents run under the session's own permissions and Codex under its `-s` sandbox flag, so
 both can run builds and tests out of the box. `agy` and `cursor-agent` refuse, in a headless run,
 every command that no allow rule covers. Give each project its own rules before Gemini or Cursor
 works there; after that they build, test and run repros like the other vendors.
 
-The user has authorized this setup. Keep it per project: never edit the global files
+When the current task authorizes setup, keep it per project: never edit the global files
 (`~/.gemini/antigravity-cli/settings.json`, `~/.cursor/cli-config.json`), and never use the
 allow-everything switches (`agy --dangerously-skip-permissions`, `cursor-agent --force` / `--yolo`).
 Those bypass the lock and process rules that every agent on a shared machine must follow.
@@ -18,12 +21,15 @@ Those bypass the lock and process rules that every agent on a shared machine mus
 | `cursor-agent` (Cursor) | `<project root>/.cursor/cli.json` | read automatically from the workspace root | `Shell(wc)` let `wc -l` run; without the file it was refused, and the global config was unchanged |
 
 A separate workspace of the same project (a second checkout, a worktree) needs its own copy. The
-plugin's Gemini bridge cannot pass `--settings`, so a run that needs commands calls `agy` directly
-(`vendors/gemini.md`). Neither run needed the folder to be on `agy`'s trusted-workspace list.
+plugin's Gemini bridge cannot pass `--settings`, so a run that needs commands calls `agy` directly (`vendors/gemini.md`). Neither run needed the folder to be on `agy`'s trusted-workspace list.
 
 If the project is under version control, add these files the way the project adds any tooling
 file (committed, or ignored if the project's rules say tooling stays local), and say which in the
 record.
+
+For Gemini read-only file inspection, use the separate deny profile in `vendors/gemini.md`.
+Do not add the command allow rules below to that profile; command-dependent work needs another
+appropriate harness. Plan mode alone was observed to permit writes.
 
 ## What to allow
 
@@ -31,8 +37,7 @@ Take the commands from the project's own instructions (AGENTS.md, CLAUDE.md, its
 rules), never from what a model asks for:
 
 - **Read-only inspection:** `git show`, `git diff`, `git log`, `git status`, `rg`, `grep`, `ls`,
-  `wc`, and the project's own read-only tools. This puts the tool on the same footing as Codex
-  `-s read-only` for reviews.
+  `wc`, and the project's own read-only tools. These command rules do not by themselves confine file edits for reviews.
 - **The project's gated build and test entry points, exactly as its rules write them**, including
   any lock or memory-gate wrapper (for example `flock ... mem-gate.sh ... make -f Makefile.ext
   test-unit`). Allow the gated form, not the bare build command, so the agent cannot skip the lock.

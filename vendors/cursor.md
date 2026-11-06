@@ -4,7 +4,7 @@ Models: Grok 4.7 and Grok 4.6 (xAI) and Composer 2.5 (Cursor). xAI owns Cursor, 
 this vendor's own models. Scores and prices are in `../BENCHMARKS.md`.
 
 Cursor also serves Claude, GPT, Gemini and other makers' models, and its `auto` model can pick any
-of them. **Use only the Grok and Composer IDs below, always with an explicit `--model`.** Never run
+of them. **Use only the explicit Grok or Composer model IDs below.** Never run
 Claude, GPT or Gemini through Cursor, and never count such a run as a Cursor check.
 
 Call the CLI as `cursor-agent`. On this machine `agent` on the PATH is Grok's own CLI
@@ -54,8 +54,29 @@ cursor-agent -p "$(cat <task-dir>/prompt.md)" --model grok-4.7-high --mode ask -
   Git) before launch and compare after, even in `ask` mode.
 - If `cursor-agent status` does not say authenticated, ask the user to run `cursor-agent login`.
 
+## Streamed progress and follow-up (tested 2026-11-06)
+
+For progress, replace `--output-format json` with `--output-format stream-json` in the launch
+command and use an `.jsonl` event log. Capture `session_id` from the initialization/final events.
+Read assistant text from `assistant.message.content[]`, tool activity from `tool_call` events,
+and final status from `result`. Do not append a second copy of final text already streamed.
+
+After the process finishes, use the same command with `--resume <session_id>` and a new prompt
+and log paths. Repeat `--model`, `--mode ask` (for a read-only assignment), `--trust`, and
+`--workspace`; preserve any additional access settings. Never use `--continue` to guess the ID.
+
+Composer 2.5 passed progress, matching session ID and marker recall without rereading. The resumed
+write probe refused in Ask mode and left no file. Its init event nevertheless reported
+`permissionMode: default`: that field is not proof of Ask-mode enforcement. The observed refusal
+is not a filesystem-isolation test. Continue checking workspace changes.
+
+`cursor-agent acp` exposes prompts, updates and cancellation, but it was not runtime-tested here.
+Do not call cancel-then-prompt seamless steering, or start a duplicate CLI against an active turn.
+
 ## Quota
 
-Not readable. `cursor-agent` shows plan usage only on its interactive `/usage` screen; in print mode
-`/usage` is sent to the model as an ordinary prompt (seen 2026-11-02). `scripts/usage` reports
-Cursor's sign-in and plan and always lists the quota as unknown, so treat Cursor as yellow.
+`cursor-agent` shows plan usage on its interactive `/usage` screen. In print mode, `/usage` is
+sent to the model as an ordinary prompt (seen 2026-11-02). `scripts/usage` opens a short-lived
+local terminal, reads the interactive screen without a model turn, and reports the included plan
+percentage and reset date. The exact reset time is not exposed. The result is cached for 15 minutes;
+if the screen cannot be read, the quota is unknown and should be treated as yellow.

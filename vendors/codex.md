@@ -19,11 +19,35 @@ codex exec --skip-git-repo-check -m gpt-6-sol -s workspace-write -C <workdir> -o
 - `-m gpt-6-astra | gpt-6-sol | gpt-6-luna`.
 - Sandbox, least access first: `-s read-only` for reviews and diagnosis; `-s workspace-write` for
   edits, builds and tests, adding `--add-dir <dir>` for each extra directory it must write;
-  `-s danger-full-access` only when that has been seen to fail for the job (record why in the brief).
+  `-s danger-full-access` only when the task requires it and existing user authorization covers it.
+  A sandbox failure alone is not authorization to widen access.
 - `--skip-git-repo-check` is needed outside Git repositories. `< /dev/null` stops the CLI waiting
   for stdin in a non-interactive shell (stdin can otherwise be used to pass the prompt).
 - Use a unique `<task-dir>` per task. Before accepting the report, check the exit status and that
   `last-message.md` was written by this run (timestamp after launch), then read it.
+
+## Streamed progress and follow-up (tested 2026-11-06)
+
+Add `--json` to `codex exec` and write stdout to an event log, stderr separately. Capture
+`thread_id` from `thread.started`. Read `item.completed` entries whose `item.type` is
+`agent_message` for progress; command items provide execution status. Require `turn.completed`
+and successful process termination; inspect error events rather than trusting an exit code alone.
+
+For a completed read-only worker, the tested resume form is:
+
+```bash
+codex -a never -s read-only -C <workdir> exec resume <thread_id> --skip-git-repo-check -m gpt-6-luna --json - < <task-dir>/followup.txt > <task-dir>/followup.jsonl 2> <task-dir>/followup.stderr
+```
+
+The test passed prompt text as the final argument; `-` is the CLI-supported stdin equivalent.
+Keep sandbox, approval policy, workspace and model explicit as above; choose actual values from
+the assignment. Luna produced intermediate progress, retained its thread ID and recalled the
+marker without rereading it. The resumed write probe reported sandbox rejection; no canary was
+created. This tests the specified launch configuration, not implicit permission inheritance.
+
+`codex queue` is separate from live steering; `--resume` can warn while still exiting zero.
+App-server `turn/steer` requires the active thread/turn on the owning server. Do not assume a new
+app-server controls an existing `exec` worker. Neither path is runtime-validated here.
 
 ## Quota
 

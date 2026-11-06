@@ -1,161 +1,160 @@
 ---
 name: orchestration
-description: Route work to the best-fit model and cross-check it with a different vendor. Use whenever you act as orchestrator and hand work to subagents: implementation, debugging, planning, design, reviews, research, analysis, benchmark or test runs. Covers which model fits which task (Claude Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5; Codex GPT-6 Astra, Sol, Luna; Gemini 4 Argon and 3.8 Flash through the Antigravity CLI; Cursor's Grok 4.7 and Composer 2.5 through cursor-agent), how to brief and launch each, and the rule that work produced by one vendor is checked once by another before it is accepted.
+description: Choose economical models for delegated work, check quota before each launch, write scoped briefs, and verify results in proportion to risk. Use when choosing and coordinating subagents; ordinary serial work stays in the main session.
 ---
 
-# Orchestration: route by fit, cross-check across vendors
+# Orchestration
 
-You are the orchestrator. You decide, brief, review and record; subagents do the work. Two rules:
+Use the least expensive model that can reliably meet the task's requirements in the available
+harness. Preserve premium capacity for difficult decisions, uncertainty and consequential errors.
+Green quota means capacity is available; it is not a reason to choose the strongest model.
 
-1. **Route each task to the best-fit model**, using the tables below. Fit means quality for that
-   kind of work, what the model can actually do in this harness, and the consequence of getting it
-   wrong first, then cost and speed.
-2. **Cross-check across vendors, once.** Anything one vendor produced (code, plan, design,
-   diagnosis, analysis) is checked by a model of a different vendor before you accept it. The
-   checker is never the same family. One independent check plus your own adjudication completes
-   the cycle: the checker's report is not itself re-checked. If a fix is needed, the fix is new
-   work and gets its own single check.
+## Before launching
 
-You own the result: verify each finding against the source before acting on it, and decide. A
-cross-check is evidence, not a verdict. If no other vendor is available, or the checker could not
-inspect the evidence (tool failure, missing access, denied action), the work is **unverified**:
-say so and do not treat it as accepted.
+The main session selects the model and effort using this skill and the current usage snapshot.
+Launch with the host subagent tool or the vendor CLI documented below.
 
-## The four vendors and where to read about each
+Do ordinary serial investigation, edits and verification in the main session. Delegate when an
+independent assignment benefits from parallelism, context isolation, specialist tools or quota
+offloading. Do not create a worker for a trivial command. Workers do not delegate further.
 
-| Vendor | Models used | Runs through | Details |
-|---|---|---|---|
-| Claude (Anthropic) | Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5 | Agent tool | `vendors/claude.md` |
-| Codex (OpenAI) | GPT-6 Astra, Sol, Luna | `codex exec` | `vendors/codex.md` |
-| Gemini (Google) | Gemini 4 Argon, Gemini 3.8 Flash | `agy` via the cc-gemini-plugin bridge | `vendors/gemini.md` |
-| Cursor (xAI) | Grok 4.7, Grok 4.6, Composer 2.5 | `cursor-agent` | `vendors/cursor.md` |
-
-Vendor is the model's maker, not the tool that runs it. `agy` and Cursor also serve other makers'
-models; use each tool only for its own vendor's models, and never count a run of another maker's
-model through them as a check by that tool's vendor.
-
-**Every vendor can do every kind of work** (read, review, plan, edit, implement, run things) and
-can check any other vendor's work. They differ in how well, which is what the rankings below and
-`BENCHMARKS.md` are for, and in what their tool needs set up first. **Read the vendor's file before
-launching one of its models**: it gives the launch command, how to read the result, and the setup
-facts (Cursor reports success even when a command was refused). Gemini and Cursor run only the
-commands a project's allow rules permit: before either works in a project, set those rules up
-there as `PROJECT-SETUP.md` describes (per project, never global); after that they build and test
-like the others. `BENCHMARKS.md` holds the evidence behind the rankings; read it
-when a choice is close or contested.
-
-## Before routing: read the quota
-
-At the start of an orchestration, and before any launch that will burn a lot of tokens, run:
+Before **every new worker or reviewer launch**, including a replacement after failure, call:
 
 ```bash
 ~/.claude/skills/orchestration/scripts/usage --text
 ```
 
-It gives each vendor a level (green, yellow, red, unknown) and an `advice` line. Cursor's quota
-cannot be read and is always unknown. Fit decides first; the levels decide how far down a ranking
-to go:
+A batch may share one immediately preceding usage call. Read the snapshot before choosing the
+model; the script is quota evidence, not a task classifier. See [USAGE.md](USAGE.md) for freshness
+and failure handling.
 
-- All green: take the first model in the row.
-- A vendor yellow or unknown: where its model and a greener vendor's are close in the row (next to
-  each other, or the row says they are close), take the greener one (`prefer` names it, or several
-  joined with `+`). High-consequence rows keep their first choice unless it is red.
-- A vendor red: no new work on it; take the next model in the row from another vendor. When that
-  means a clearly weaker model for high-consequence work, say so in the record, and ask the user
-  if the gap is large.
-- Cross-checks are never skipped for budget; take the next checker in the row on a greener vendor.
-- All red: stop launching and report the snapshot and reset times.
-- If the script could not read a vendor, say so in the record.
+Read the selected vendor's launch and result-collection instructions before dispatch:
+[Claude](vendors/claude.md), [Codex](vendors/codex.md), [Gemini](vendors/gemini.md),
+[Cursor](vendors/cursor.md). Use only model IDs actually supported by the host or CLI.
+Check required paths, services, commands and network access before launch. Preserve read-only
+roles and existing authorization. A failed tool call does not authorize broader permissions.
+See [PROJECT-SETUP.md](PROJECT-SETUP.md) when a vendor needs project command permissions.
 
-Details, thresholds and account shapes: `USAGE.md`.
+## Choose by the decisions still needed
 
-## Which model for which task
+You own model and effort selection. Choose using the task's unresolved decisions, consequences
+of error, required tools, acceptance checks, current quota and reset timing, benchmark evidence,
+and observed outcomes. Choose an economical model likely to succeed, considering retries, review
+and repair costs. Do not equate API prices with subscription-quota consumption.
 
-Judgement informed by `BENCHMARKS.md`, not proven by it. Each row ranks the best model of every
-vendor for that kind of work, best first; a later model is a fallback, not a forbidden choice.
-Route by the hardest and most consequential part of the task, not its length.
+Model lists and benchmark rankings are references, not defaults or mandatory ladders. Spending
+more requires a concrete benefit for this assignment; choosing cheaply must still meet its
+requirements. Briefly record why the choice fits and reconsider when actual results contradict it.
 
-| Task kind | Ranked fit, best first | Notes |
-|---|---|---|
-| Architecture, design, plans that set direction | Fable 5.1 (or Opus 5.5), Astra, Argon, Grok 4.7 | High consequence; spend on the strongest model available |
-| Hard root cause, ambiguous bugs, concurrency, persistence, lifecycle ordering | Opus 5.5 or Fable 5.1, Astra, Argon, Grok 4.7 | Do not route these down because the diff is small. Diagnosis usually runs repros: give Gemini or Cursor the project's command setup first |
-| Security review, auth, input validation, anything security-sensitive (even small diffs) | Astra, Argon, Opus 5.5 or Fable 5.1, Grok 4.7 | Astra and Argon lead SEC-Bench Pro and ExploitGym. Use a vendor's strongest model here, not its small one |
-| Migration, rollback, data conversion, schema/wire changes | Opus 5.5, Astra, Argon, Grok 4.7 | Requires a rehearsal or test plan |
-| Complex implementation, large refactors | Opus 5.5, Astra or Sol, Argon, Grok 4.7 | Argon leads DeepSWE |
-| Routine implementation, local fixes | Sonnet 5.5, Sol, Argon, Grok 4.7 or Composer 2.5 | |
-| Terminal-heavy runs: builds, test suites, benchmark runs, collecting results | Sonnet 5.5, Sol or Astra, Argon, Grok 4.7 | Sonnet leads Terminal-Bench 4.0 (70.6); Astra 57.9, Argon 57.4, Grok 4.7 38.0. Gemini and Cursor need the project's command setup first |
-| Reading very long inputs: whole subsystems, long logs or traces, cross-file consistency | Argon, Astra, Opus 5.5, Grok 4.7 | Argon leads GraphWalks 256K-1M; give it paths and a precise question. Grok's window is 500K |
-| Experiment design, statistics, interpreting benchmark or A/B results, causal claims | Opus 5.5, Astra, Argon, Grok 4.7 | Not arithmetic; needs reasoning about noise and confounds |
-| UI and visual QA that drives the app (clicks, screenshots, layout) | Sonnet 5.5 or Opus 5.5, Astra, Argon, Grok 4.7 | Requires the tools to see the UI; say if they cannot. No computer-use score for Grok |
-| Reading static images, charts, video or scanned documents | Argon, Opus 5.5 or Sonnet 5.5, Astra, Grok 4.7 | Argon leads no-tools chart and video reading; Claude with tools is stronger on charts. No vision score for Grok |
-| Extracting fields from documents into structure | Sol or Luna, Opus 5.5, Flash, Composer 2.5 | Sol and Luna lead ExtractBench |
-| Mechanical: extracting numbers from logs, file inventories, renames, simple summaries | Haiku 5.5, Luna, Flash, Composer 2.5 | Use the small models only when the task truly has no judgement in it |
-| Research and source lookup | Sonnet 5.5, Sol, Argon, Grok 4.7 | Require cited primary sources and versions. Grok 4.6's prompt-injection score is weak (`BENCHMARKS.md`); check what Grok read |
-| Adversarial review of a finished change | See the cross-check table | |
+Use these considerations to exercise judgment, not as automatic escalation triggers:
 
-Effort: for high-consequence work use the model's high or xhigh effort (Gemini and Grok: the
-`-high` or `-xhigh` model ID); for mechanical work the default is enough.
+| Assignment | Considerations |
+|---|---|
+| Extraction, inventories, narrow lookup, simple summaries | Are sources clear and results directly checkable, or is interpretation needed? |
+| Prescribed builds/tests and result collection | Can direct tools handle it? Separate execution from diagnosing unexpected failures. |
+| Local implementation and directed verification | Is behavior settled, scope limited, and verification adequate? |
+| Implementation, debugging, review and synthesis | How much ambiguity, cross-system context and independent reasoning remain? |
+| Architecture, security, concurrency, persistence and migrations | What are the consequences of a wrong decision, and what evidence or expertise is needed? |
 
-## Who checks what
+Confirm actual model IDs and supported effort settings in the selected host or CLI.
+[BENCHMARKS.md](BENCHMARKS.md) provides provisional evidence, not a routing order. Account for
+conflicting results and differences in revisions, effort, harnesses and tools; do not infer
+suitability from one score or treat a prior successful choice as a permanent default.
 
-The checker is always a different vendor from the worker. Each row ranks the other three vendors'
-best checker for that kind of work, best first; take the first that is not red.
+Small models may exercise limited judgment when requirements are clear, scope is limited, errors
+are recoverable and results can be checked. Do not require "no judgment". A short diff can still
+require strong reasoning. A long run of prescribed commands need not.
 
-| Work done by | Kind of work | Checkers, best first |
-|---|---|---|
-| Claude | Code, fixes | Codex Sol (Astra if security, concurrency, persistence, migration or wide impact), Gemini Argon, Cursor Grok 4.7 |
-| Claude | Plan, design, architecture, diagnosis, analysis of results | Codex Astra, Gemini Argon, Cursor Grok 4.7 |
-| Claude | Long-input or cross-file consistency claims, image or video reading | Gemini Argon, Codex Astra, Cursor Grok 4.7 |
-| Claude | Measurement or run report (numbers only) | Codex Luna, Gemini Flash, Cursor Composer 2.5, each re-deriving the numbers from the raw logs |
-| Codex | Code, fixes | Claude Opus 5.5 (Sonnet 5.5 for small, low-risk local diffs), Gemini Argon, Cursor Grok 4.7 |
-| Codex | Plan, design, architecture, diagnosis, analysis of results | Claude Fable 5.1 or Opus 5.5, Gemini Argon, Cursor Grok 4.7 |
-| Codex | Measurement or run report (numbers only) | Claude Haiku 5.5, Gemini Flash, Cursor Composer 2.5 |
-| Gemini | Code, fixes | Claude Opus 5.5, Codex Sol (Astra if security-sensitive), Cursor Grok 4.7 |
-| Gemini | Plan, design, architecture, diagnosis, long-input reading, analysis | Claude Fable 5.1 or Opus 5.5, Codex Astra, Cursor Grok 4.7 |
-| Gemini | Measurement or extraction (numbers only) | Claude Haiku 5.5, Codex Luna, Cursor Composer 2.5 |
-| Cursor | Code, fixes | Claude Sonnet 5.5 (Opus 5.5 if the change is not small), Codex Sol, Gemini Argon |
-| Cursor | Plan, design, architecture, diagnosis, analysis | Claude Opus 5.5, Codex Astra, Gemini Argon |
-| Cursor | Measurement or extraction (numbers only) | Claude Haiku 5.5, Codex Luna, Gemini Flash |
+Separate making a decision from executing an agreed decision when they produce useful independent
+assignments. Do not fragment tightly coupled work merely to obtain a cheaper tier. A premium-model
+selection needs a concrete reason such as unresolved ownership semantics, not "best quality".
+Effort is a separate choice: use default or low effort for prescribed work, increasing it for
+reasoning the assignment actually requires. Do not automatically choose maximum effort.
 
-For security-sensitive or high-impact work, use the checker vendor's strongest model (Astra, Opus
-5.5 or Fable 5.1, Argon, Grok 4.7 xhigh), not its small one. A check that needs to run something (a
-test, a repro) needs the project's command setup for a Gemini or Cursor checker; whatever a
-checker could not run, it says so, and that part stays unverified until someone runs it.
+## Quota and escalation
 
-Proportionality: every substantive change, plan or conclusion gets one check. A pure data run
-(build, benchmark run) is not repeated; its interpretation is checked from the raw logs.
-A checker does not edit the work it checks; launch it read-only where the tool allows (Codex
-`-s read-only`, Cursor `--mode ask`), and for Gemini and Cursor confirm the workspace is unchanged
-after the run (the vendor files say how).
+- Inspect shared and model-specific limits. A red model bucket excludes its affected models, not
+  every model on that account. A red shared limit excludes all models drawing from it.
+- Prefer healthy capacity among suitable candidates; do not automatically upgrade to a premium
+  model on another provider when an economical model remains eligible.
+- Unknown or stale quota is uncertainty, not free capacity. Prefer a suitable measured account;
+  if none exists, record the uncertainty and use a bounded assignment without blind retries.
+- If every eligible account is red, stop new launches and report reset times. Do not spend extra
+  credits or reset credits without the user's authorization.
+- After a quota rejection, refresh the affected provider with `--vendor <name> --no-cache`, then
+  reroute. Do not resubmit an unchanged blocked assignment.
+- When a worker discovers unresolved semantics, conflicting requirements or failed acceptance
+  checks it cannot resolve within scope, it returns evidence and the exact decision needed.
+  Continue the existing worker for a concrete correction; reroute reasoning when necessary.
+  Do not repeatedly retry the same approach or jump to the strongest model without a reason.
 
-## How to brief any subagent
+## Verification proportional to consequences
 
-Write the brief to a file and pass it. A good brief has:
+Every result needs evidence. Mechanical transformations and prescribed runs may be accepted using
+deterministic checks and parent inspection of the artifacts; they do not require a second model.
+A run is not repeated solely to verify its report. Check numbers against its raw output.
 
-1. **Goal and why**, plus where things stand (commit, branch, what earlier phases did), so the
-   worker does not rediscover the repo.
-2. **Exact scope:** files it may change, files it must not touch, and what it must not run.
-3. **The repository's standing rules**, copied from its AGENTS.md / CLAUDE.md: version control
-   rules, one heavy build or test at a time, no pattern-killing processes, no shared
-   infrastructure changes without approval, never touching processes it did not start.
-4. **Acceptance:** observable truths and the exact commands that prove them.
-5. **Report format:** files changed, results with numbers, every deviation with its reason, and
-   verified facts kept separate from inferences.
+Use one independent, different-vendor review for consequential changes, ambiguous conclusions,
+architecture/security decisions and broad-impact work, or whenever the project/user requires it.
+Explicitly select a checker from a different model maker. Vendor means the model's maker,
+not the hosting CLI; do not use an auto-selected model for an independent check.
+A narrow check against explicit acceptance criteria may use an economical checker. Broad searches
+for unknown defects need stronger reasoning. Judge the check's scope, not just the worker's tier.
 
-A cross-check brief adds: the original task brief, the produced diff or document (paths), the
-acceptance criteria, and the instruction to report findings ranked by severity, each with
-file:line evidence and "confirmed" or "suspected", to state what it could not inspect, and to say
-plainly when it finds nothing. A Gemini or Cursor brief also lists exactly the commands it may run
-(those in the project's allow rules; anything else fails or, in Cursor, comes back invented), and
-asks for the answer on its own line.
+The checker is read-only. It reports confirmed versus suspected findings with source evidence,
+what it could not inspect, and plainly when it finds nothing. Its report is not itself re-reviewed.
+After a fix, rerun affected checks and obtain targeted independent review when the changed behavior
+remains consequential. Do not restart a full review cycle for a mechanical correction.
 
-## Orchestrator duties that stay with you
+The parent adjudicates findings against actual evidence. A required independent review that cannot
+run remains incomplete; report that limitation rather than calling the work accepted.
 
-- Decide, sequence and record. Keep heavy jobs (builds, test suites, benchmarks) to one at a time
-  across all agents.
-- Review every diff yourself, in addition to the cross-check.
-- Never report a subagent's claim as fact without checking it against the artefact (diff, log,
-  trace). Never predict a running agent's result.
-- Record in the project's system of record (here: Noriq) which model did the work, which model
-  checked it, and the outcome (accepted, fixed, or unverified), plus the usage `advice` line that
-  was in force when the routing was chosen.
+## Progress and follow-ups
+
+For all four vendors, use the tested event-stream and explicit-session follow-up paths in the
+vendor files. Gemini read-only launches require its explicit deny profile on every turn; plan
+mode alone does not prevent writes.
+
+Keep a small worker record: vendor, model/effort, explicit session ID, workspace, access settings,
+process handle/PID, raw event log, stderr, final result and last consumed log offset. Never address
+"the most recent" session. Give only one process ownership of a worker's active turn.
+
+Ask for a short update at start, meaningful milestones, blockers and completion: completed work,
+new finding, next step, blocker. During long work, request updates between steps when practical;
+do not promise clock-timed model output during blocking tool calls. Native workers use the host's
+parent-message channel with completion notifications enabled. CLI workers emit updates to stdout;
+the parent must collect the stream, not just the final response.
+
+Read only newly appended complete events, retaining partial lines until complete. Extract concise
+assistant messages, tool status, errors and final results; do not repeatedly load raw transcripts
+or private reasoning. Preserve complete logs on disk. Check process state and log activity during
+long commands without sending model status prompts. Activity is not proof of task progress.
+
+After a turn finishes, reuse its explicit session ID for a related correction. Run the cached
+usage check before every resumed CLI launch too. Repeat the workspace, model and access settings;
+do not assume resume inherits them. Preserve the model unless changed scope or quota warrants
+reconsideration. Start a new session with a concise handoff when scope changes substantially or
+accumulated context becomes wasteful. A context handoff must preserve unresolved work and evidence.
+
+Distinguish follow-up after completion, queued input, live steering, and interrupt-then-redirect.
+Do not start a duplicate resume against a running session. Treat submission, acknowledgment and
+completion as separate facts where exposed; verify the returned session ID and relevant response.
+Exit zero alone is not delivery or acceptance. Live steering and ACP cancellation remain untested
+here; do not use them as the default or claim they worked based on CLI help alone.
+
+## Brief and record
+
+Each assignment has one deliverable, its dependencies, settled behavior, unresolved decisions,
+exact scope, relevant project rules, required access and observable acceptance checks. Give paths
+and focused context instead of copying the whole conversation. Include the worker's escalation
+boundary. A review brief adds the original requirements, resulting artifacts and review scope.
+
+Record the chosen model/effort and concrete reason, quota observation time, worker and checker
+results, retries/escalations, parent repairs, and total reported usage per accepted result.
+Keep missing usage marked unknown; do not invent token counts or infer subscription charges from
+API prices. Use the project's existing authorized record or local task artifact; this skill does
+not mandate Noriq updates. Compare acceptance rate, repair work, total usage and elapsed time when
+adjusting defaults. Cheap first attempts are useful only when total accepted-result cost improves.
+
+Keep heavy jobs to one at a time where project rules require it. Before ending, every process you
+started must be finished, killed, or explicitly handed to the user with its PID and purpose.

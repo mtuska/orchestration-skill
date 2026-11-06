@@ -15,9 +15,11 @@ Every kind of work: reading, review, planning, editing and implementation. Setup
   model chose to answer with a command was denied and returned nothing. Give the project its own
   rules first (`../PROJECT-SETUP.md`) and pass them with `--settings`; then Gemini builds, tests
   and runs repros like the other vendors. Never edit the global `settings.json`.
-- **File edits are auto-accepted.** The bridge always runs `agy` in `accept-edits` mode, so
-  implementation works without approval prompts. The other side: "do not modify files" is only an
-  instruction in the brief, so for read-only work check the workspace after the run.
+- **Plan mode is not read-only enforcement.** A 2026-11-06 canary test wrote a file even with
+  `--mode plan`. The bridge's `accept-edits` mode also permits writes. For read-only work, use the
+  explicit deny profile below through the direct CLI, not the bridge. `--sandbox` is a terminal
+  restriction, not proof all file tools are isolated. Use a different harness when OS-enforced
+  filesystem isolation is required.
 - **It reads files itself** from the `--cwd` workspace; give it paths, not pasted content.
 
 ## How to launch
@@ -37,7 +39,7 @@ conversation with `--conversation <id>`, and `usage` has token counts. Seen on 2
 allow rule for `wc`, `wc -l` ran and its real output came back; without one, the same run exited 0
 with an empty `response` and `denied_actions` set.
 
-**Without commands (reading, review, edits someone else will build):** the `cc-gemini-plugin`
+**Without commands (authorized edits someone else will build):** the `cc-gemini-plugin`
 bridge. It passes the task to `agy` over stdin unchanged, fails the run itself on any denied action,
 and prints one JSON envelope:
 
@@ -68,6 +70,58 @@ node "$B" --cwd <workdir> --model gemini-4-argon-high --format json --timeout 90
   the JSON and read `result.response` yourself.
 - If `agy` is missing or signed out, the bridge fails; ask the user to sign in with `agy`
   interactively. Do not fall back to any other Gemini client.
+
+## Streamed progress and follow-up (tested 2026-11-06)
+
+The direct CLI with `--output-format stream-json` emits `init`, `step_update` and `result` events.
+Capture `conversation_id` from `init`; assistant text arrives in `step_update.text_delta`.
+Tool events include name, state and errors. The final payload is `result`, with `status`,
+`response` and usage. Inspect tool errors too: an intentionally denied write returned overall
+`SUCCESS`, so success alone does not prove all requested actions ran. Usage counters on a retained
+conversation are cumulative; do not sum them as if each turn were independent.
+
+After completion, repeat the same launch configuration with `--conversation <conversation_id>`
+and a new prompt/log path. Do not use `--continue` to guess the conversation. Flash passed streamed
+output, matching IDs and marker recall without rereading. Persistent stream input is a separate
+path: documentation says wait for the current result before sending the next prompt. Live
+steering, ACP cancellation and concurrently resuming an active turn are not validated here.
+
+### Required read-only profile
+
+Store this profile in the task's artifact directory and pass it with `--settings` on **every**
+initial and resumed read-only launch. Do not modify global settings or merge in command/MCP allows.
+The parent creates the directory and profile; the worker must not change them.
+
+```json
+{
+  "permissions": {
+    "allow": [],
+    "ask": [],
+    "deny": ["write_file(*)", "command(*)", "mcp(*)", "execute_url(*)"]
+  }
+}
+```
+
+```bash
+agy --model gemini-3.8-flash-low --settings <task-dir>/readonly.json --output-format stream-json --print-timeout 900s -p "$(cat <task-dir>/prompt.txt)" < /dev/null > <task-dir>/events.jsonl 2> <task-dir>/stderr.log
+```
+
+Run from the intended workspace. For follow-up, add `--conversation <conversation_id>` and use
+new prompt/output files, repeating `--settings` and the model. This profile supports file-reading
+work; terminal commands, MCP and browser execution are denied. Route command-dependent checks
+elsewhere rather than weakening it. Model defaults still must follow the task and quota snapshot.
+
+The 2026-11-06 Flash test used this exact profile: it read a random marker, attempted a file write,
+then recalled the marker and attempted another write on resume. Both writes produced actual
+`write_file` tool errors matching the configured deny rule; neither canary file existed. This is
+verified native permission enforcement for that path, not a proof against every tool or filesystem
+escape. Check the workspace before and after. Retest after CLI changes before relying on it.
+
+Do not rely on `--mode plan`; also, combining it with `--disable-slash-commands` emitted a warning
+that plan mode had no effect. Neither flag is needed in the tested deny-profile command above.
+The bridge cannot pass `--settings`, so it is not an eligible route for this profile.
+
+Permission rule semantics: [official CLI permissions](https://antigravity.google/docs/permissions).
 
 ## Quota
 
