@@ -6,25 +6,24 @@ Companion to the orchestration skill. Read-only, stdlib only.
   usage                 # JSON for every vendor, with a routing hint
   usage --text          # short human summary
   usage --vendor codex  # one vendor
-  usage --no-refresh    # never spend a Haiku call to refresh an expired Claude token
+  usage --no-refresh    # disable Claude/Grok token refresh
   usage --no-cache      # bypass the 15-minute cache
 
 Exit 0 when at least one vendor was read; 2 when none could be read.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime as dt
 import fcntl
 import glob
 import json
+import math
 import os
-import pty
 import re
 import select
 import signal
-import struct
 import subprocess
 import sys
-import termios
 import time
 import urllib.error
 import urllib.request
@@ -35,14 +34,13 @@ CACHE_FILE = os.path.join(CACHE_DIR, "last.json")
 CACHE_LOCK = os.path.join(CACHE_DIR, "last.lock")
 CACHE_TTL = 15 * 60
 FAILURE_TTL = 60
-CACHE_VERSION = 2
+CACHE_VERSION = 8
 CLAUDE_CREDS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(HOME, ".claude")), ".credentials.json")
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.join(HOME, ".codex"))
 
-RED_PCT = 90
-YELLOW_PCT = 70
-PACE_YELLOW = 1.3  # used% / expected% at this point of the window
+PACE_YELLOW = 1.3  # 30% above expected consumption at this point in the window
+PACE_RED = 1.5     # 50% above expected consumption
 
 
 def now_utc():
@@ -106,25 +104,34 @@ def window(wid, label, percent, resets_at, duration_s, active=None, extra=None):
 def level_for(windows, hard_stop=False):
     if hard_stop:
         return "red"
-    if not any(w.get("percent") is not None for w in windows):
-        return None  # nothing measurable: caller treats as unknown
-    worst = "green"
+    levels = []
     for w in windows:
         p = w.get("percent")
-        if p is None:
-            continue
-        if p >= RED_PCT:
+        ratio = w.get("pace_ratio")
+        if p is not None and p >= 100:
+            return "red"  # exhausted, including reserved capacity
+        if p is None or ratio is None:
+            levels.append(None)
+        elif ratio >= PACE_RED:
             return "red"
-        if p >= YELLOW_PCT or (p >= 50 and (w.get("pace_ratio") or 0) > PACE_YELLOW):
-            worst = "yellow"
-    return worst
+        elif ratio >= PACE_YELLOW:
+            levels.append("yellow")
+        else:
+            levels.append("green")
+    if "yellow" in levels:
+        return "yellow"
+    if not levels or None in levels:
+        return None  # no reliable pace, including the first 2% of a window
+    return "green"
 
 
 def binding(windows):
     cands = [w for w in windows if w.get("percent") is not None]
     if not cands:
         return None
-    b = max(cands, key=lambda w: w["percent"])
+    b = max(cands, key=lambda w: (
+        {"red": 3, "yellow": 2, None: 1, "green": 0}[level_for([w])],
+        w.get("pace_ratio") or 0, w["percent"]))
     return {"id": b["id"], "label": b["label"], "percent": b["percent"], "headroom_percent": round(100 - b["percent"], 1),
             "resets_in": b.get("resets_in"), "reset_label": b.get("reset_label")}
 
@@ -213,6 +220,7 @@ def read_claude(allow_refresh):
                 windows.append(window(key, label, v["utilization"], parse_ts(v.get("resets_at")), dur))
                 if key in ("seven_day_opus", "seven_day_sonnet"):
                     windows[-1]["bucket"] = key
+                    windows[-1]["hard_stop"] = bool(v.get("locked_reason"))
                     windows[-1]["level"] = level_for([windows[-1]], bool(v.get("locked_reason")))
                     if windows[-1]["level"] in ("yellow", "red"):
                         out["notes"].append(f"model bucket '{key}' is {windows[-1]['level']}; check eligibility for that model")
@@ -226,6 +234,7 @@ def read_claude(allow_refresh):
                           "disabled_reason": xu.get("disabled_reason")}
     out["windows"] = windows
     out["binding"] = binding(shared_windows)
+    out["hard_stop"] = hard_stop
     out["level"] = level_for(shared_windows, hard_stop)
     out["status"] = "ok" if windows else "unavailable"
     if not windows:
@@ -372,6 +381,7 @@ def norm_codex(rl, camel, by_id=None, ordinary_allowed=None, reset_credits=None)
         "individual_limit": individual,
         "credits": {"has_credits": has_credits, "unlimited": credits.get("unlimited"),
                     "balance": (lambda b: float(b) if b not in (None, "") else None)(credits.get("balance"))} if credits else None,
+        "hard_stop": hard_stop,
         "rate_limit_reached_type": reached,
         "spend_control_reached": spend_stop,
         "ordinary_usage_allowed": ordinary_allowed,
@@ -470,109 +480,92 @@ def read_gemini():
     return out
 
 
-# ---------------------------------------------------------------- Cursor
+# ---------------------------------------------------------------- Cursor / shared Grok pool
 
-def cursor_json(*args, timeout=30):
-    p = subprocess.run(["cursor-agent", *args, "--format", "json"], stdin=subprocess.DEVNULL,
-                       capture_output=True, text=True, timeout=timeout, cwd=CACHE_DIR)
-    if p.returncode != 0:
-        raise RuntimeError(f"cursor-agent {' '.join(args)} exited {p.returncode}: {(p.stderr or p.stdout).strip()[:200]}")
-    return json.loads(p.stdout)
+GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 
 
-def cursor_usage_screen(timeout=30):
-    """Read Cursor's local /usage command in a PTY; print mode sends it to the model."""
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
-    proc = None
+def grok_token():
+    path = os.path.join(os.path.expanduser(os.environ.get("GROK_HOME", "~/.grok")), "auth.json")
+    with open(path) as f:
+        accounts = json.load(f)
+    tokens = [a["key"] for a in accounts.values() if isinstance(a, dict) and a.get("key")]
+    if len(tokens) != 1:
+        raise ValueError("Grok auth must contain exactly one account to identify the shared pool")
+    return tokens[0]
+
+
+def refresh_grok_token():
+    """Initialize the CLI to refresh OAuth without submitting a model prompt."""
+    p = subprocess.Popen(["grok", "agent", "stdio"], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
-        proc = subprocess.Popen(["cursor-agent", "--trust", "--workspace", CACHE_DIR],
-                                stdin=slave, stdout=slave, stderr=slave, cwd=CACHE_DIR,
-                                start_new_session=True)
-        os.close(slave)
-        slave = -1
-        raw = bytearray()
-        sent = confirmed = False
-        deadline = time.monotonic() + timeout
+        p.stdin.write((json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                  "params": {"protocolVersion": 1, "clientCapabilities": {}}}) + "\n").encode())
+        p.stdin.flush()
+        deadline = time.monotonic() + 8
+        buf = b""
         while time.monotonic() < deadline:
-            ready, _, _ = select.select([master], [], [], min(1, max(0, deadline - time.monotonic())))
+            ready, _, _ = select.select([p.stdout], [], [], max(0, deadline - time.monotonic()))
             if not ready:
-                continue
-            try:
-                chunk = os.read(master, 65536)
-            except OSError:
                 break
+            chunk = os.read(p.stdout.fileno(), 65536)
             if not chunk:
                 break
-            raw.extend(chunk)
-            if len(raw) > 1_000_000:
-                raise RuntimeError("Cursor usage screen produced too much output")
-            screen = raw.decode("utf-8", "replace")
-            if not sent and "Plan, search, build anything" in screen:
-                os.write(master, b"/usage\r")
-                sent = True
-            if sent and not confirmed and "Show plan and on-demand usage" in screen:
-                os.write(master, b"\r")
-                confirmed = True
-            if confirmed and "Esc to close" in screen and "Included" in screen:
-                screen = re.sub(r"\x1b\][^\x07]*(?:\x07|\x1b\\)", "", screen)
-                return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen).replace("\r", "")
-        raise RuntimeError("Cursor /usage did not return a complete screen")
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                try:
+                    if json.loads(line).get("id") == 1:
+                        return
+                except (ValueError, AttributeError):
+                    continue
+        raise RuntimeError("Grok token refresh timed out or exited before initialization")
     finally:
-        if proc is not None:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
-        if slave >= 0:
-            os.close(slave)
-        os.close(master)
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        p.wait()
+        p.stdin.close()
+        p.stdout.close()
 
 
-def read_cursor():
-    """Read the plan and included usage from Cursor's interactive /usage screen."""
-    out = {"vendor": "cursor", "status": "unavailable", "source": "cursor-agent status/about", "plan": None,
-           "windows": [], "notes": []}
+def grok_billing():
+    req = urllib.request.Request(GROK_BILLING_URL, headers={
+        "Authorization": f"Bearer {grok_token()}", "X-XAI-Token-Auth": "xai-grok-cli",
+        "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as response:
+        return json.load(response)
+
+
+def read_cursor(allow_refresh=True):
+    """Read the shared Cursor/Grok plan pool directly, without a terminal UI."""
+    out = {"vendor": "cursor", "status": "unavailable", "source": "Grok billing API (shared Cursor/Grok pool)",
+           "plan": None, "windows": [], "notes": []}
     try:
-        st = cursor_json("status")
-        if not st.get("isAuthenticated"):
-            out["notes"].append("cursor-agent is not signed in; run `cursor-agent login`")
-            return out
-        out["plan"] = (cursor_json("about").get("subscriptionTier") or "").lower() or None
-    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as e:
-        out["notes"].append(f"cursor-agent query failed: {e}")
-        return out
-    try:
-        screen = cursor_usage_screen()
-        included = re.search(r"\bIncluded\s+([\d.]+)% used\b", screen)
-        if not included:
-            raise ValueError("included quota was missing from /usage")
-        reset = re.search(r"\bResets\s+([A-Z][a-z]{2}\s+\d{1,2})\b", screen)
-        period = re.search(r"\b(Monthly|Weekly) plan and on-demand usage\b", screen)
-        reset_label = reset.group(1) if reset else None
-        period_name = period.group(1).lower() if period else None
-        w = window("included", f"{period_name} included" if period_name else "included plan",
-                   float(included.group(1)), None, None,
-                   extra={"reset_label": reset_label, "period": period_name})
-        out["windows"] = [w]
+        try:
+            data = grok_billing()
+        except urllib.error.HTTPError as e:
+            if e.code not in (401, 403) or not allow_refresh:
+                raise
+            refresh_grok_token()
+            data = grok_billing()
+        config = data.get("config") or {}
+        percent = config.get("creditUsagePercent")
+        if isinstance(percent, bool) or not isinstance(percent, (int, float)) or not math.isfinite(percent) or percent < 0:
+            raise ValueError("shared pool usage is missing or invalid")
+        period = config.get("currentPeriod") or {}
+        start, end = parse_ts(period.get("start")), parse_ts(period.get("end"))
+        duration = (end - start).total_seconds() if start and end and end > start else None
+        label = "weekly shared Grok/Cursor" if period.get("type") == "USAGE_PERIOD_TYPE_WEEKLY" else "shared Grok/Cursor"
+        out["windows"] = [window("shared", label, percent, end, duration,
+                                 extra={"starts_at": iso(start) if start else None})]
         out["binding"] = binding(out["windows"])
         out["level"] = level_for(out["windows"])
         out["status"] = "ok"
-        out["source"] = "cursor-agent interactive /usage"
-        out["categories"] = {name.lower(): float(m.group(1)) for name in ("Auto", "API")
-                             if (m := re.search(rf"\b{name}\s+([\d.]+)% used\b", screen))}
-        if m := re.search(r"\bOn-Demand\s+\$([\d,.]+)\s*/\s*\$([\d,.]+)", screen):
-            out["on_demand"] = {"used": float(m.group(1).replace(",", "")),
-                                "limit": float(m.group(2).replace(",", ""))}
-        if reset_label:
-            out["notes"].append(f"plan resets {reset_label}; Cursor does not show the exact reset time here")
-    except (OSError, RuntimeError, ValueError) as e:
-        out["notes"].append(f"Cursor /usage read failed: {e}")
+    except (OSError, ValueError, RuntimeError, TypeError, AttributeError, subprocess.SubprocessError) as e:
+        out["notes"].append(f"Grok billing read failed: {e}")
     return out
 
 
@@ -582,8 +575,91 @@ VENDORS = ("claude", "codex", "gemini", "cursor")
 LEVEL_RANK = {"green": 0, "yellow": 1, "red": 2, None: 1}  # unknown counts as yellow
 
 
+POLICY_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "usage-policy.json")
+POLICY_KEYS = {"ignore_pace", "prefer", "allow_credits", "reserve_percent"}
+
+
+def load_policy(path):
+    try:
+        with open(path) as f:
+            policy = json.load(f)
+    except FileNotFoundError:
+        return {}
+    if not isinstance(policy, dict) or set(policy) - set(VENDORS):
+        raise ValueError("policy must map vendor names (claude, codex, gemini, cursor) to options")
+    for vendor, options in policy.items():
+        if (not isinstance(options, dict) or set(options) - POLICY_KEYS
+                or any(type(value) is not bool for key, value in options.items() if key != "reserve_percent")):
+            raise ValueError(f"invalid policy for {vendor}: use boolean ignore_pace, prefer, allow_credits")
+        reserve = options.get("reserve_percent", 0)
+        if type(reserve) not in (int, float) or not math.isfinite(reserve) or not 0 <= reserve <= 100:
+            raise ValueError(f"invalid reserve_percent for {vendor}: use a number from 0 to 100")
+    return policy
+
+
+def apply_policy(vendors, policy):
+    """Policy changes routing advice, never the cached measurements."""
+    for name, d in vendors.items():
+        opts = {key: policy.get(name, {}).get(key, 0 if key == "reserve_percent" else False) for key in sorted(POLICY_KEYS)}
+        # Rebuild copies from actual values so cached data and repeated applications stay raw.
+        adjusted = []
+        for original in d.get("windows", []):
+            w = dict(original)
+            actual = w.get("actual_percent", w.get("percent"))
+            reserve = opts["reserve_percent"]
+            percent = None if actual is None else min(100, actual + reserve) if reserve else actual
+            timing = window(w.get("id", "quota"), w.get("label", "quota"), percent, parse_ts(w.get("resets_at")),
+                            w.get("window_hours") * 3600 if w.get("window_hours") else None)
+            w.update(timing)
+            w["actual_percent"] = actual
+            w["reserve_percent"] = reserve
+            if w.get("bucket"):
+                w["level"] = level_for([w], w.get("severity") in ("exceeded", "critical", "locked") or w.get("hard_stop", False))
+            adjusted.append(w)
+        if adjusted:
+            d["windows"] = adjusted
+            shared = [w for w in adjusted if not w.get("bucket")]
+            d["level"] = level_for(shared, d.get("hard_stop", False))
+            d["binding"] = binding(shared)
+        d["policy"] = opts
+        d["routing_level"] = d.get("level")
+        d["policy_notes"] = []
+        if not any(opts.values()):
+            continue
+        if d.get("status") != "ok":
+            d["policy_notes"].append("override cannot establish availability from stale or missing quota")
+            continue
+        blocked = (d.get("hard_stop") or d.get("spend_control_reached")
+                   or d.get("ordinary_usage_allowed") is False or d.get("rate_limit_reached_type"))
+        if blocked:
+            d["routing_level"] = "red"
+            d["policy_notes"].append("service block or spending limit remains in effect")
+            continue
+        windows = [w for w in d.get("windows", []) if not w.get("bucket")]
+        exhausted = any((w.get("percent") or 0) >= 100 for w in windows)
+        credits = d.get("credits") or {}
+        credit_ready = (name == "codex" and opts["allow_credits"]
+                        and d.get("ordinary_usage_allowed") is True
+                        and credits.get("has_credits") is True
+                        and (credits.get("unlimited") is True or (credits.get("balance") or 0) > 0))
+        if exhausted and credit_ready:
+            d["routing_level"] = "green"
+            d["policy_notes"].append("included quota exhausted; existing credits authorized and service allows usage")
+        elif opts["ignore_pace"] and not exhausted and windows and all(w.get("percent") is not None for w in windows):
+            d["routing_level"] = "green"
+            d["policy_notes"].append("pace restriction ignored by user policy")
+        if opts["allow_credits"]:
+            d["policy_notes"].append("existing credits authorized; no purchases, limit increases or reset-credit redemption")
+            if name != "codex":
+                d["policy_notes"].append("automatic credit availability check unsupported for this vendor; quota exhaustion still blocks routing")
+
+
+def routing_level(d):
+    return d.get("routing_level", d.get("level"))
+
+
 def advise(vendors):
-    levels = {v: (vendors[v].get("level") if vendors[v]["status"] in ("ok", "stale") else None)
+    levels = {v: (routing_level(vendors[v]) if vendors[v]["status"] in ("ok", "stale") else None)
               for v in VENDORS if v in vendors}
     notes = []
     for v, lvl in levels.items():
@@ -598,7 +674,7 @@ def advise(vendors):
             notes.append(f"{v}: {lvl}; binding window '{b['label']}' at {b['percent']}% used, {reset}, pace {pace}")
     if len(vendors) == 1:  # --vendor: the other side was not read, so no cross-vendor preference
         (v, vd), = vendors.items()
-        lvl = vd.get("level") if vd["status"] in ("ok", "stale") else None
+        lvl = routing_level(vd) if vd["status"] in ("ok", "stale") else None
         rule = {"red": f"{v} red: launch no new work on it",
                 "yellow": f"{v} yellow: prefer the other vendor where the table allows",
                 "green": f"{v} green"}.get(lvl, f"{v} quota unknown: treat as yellow")
@@ -620,8 +696,13 @@ def advise(vendors):
         rule = f"choose the least expensive suitable model; among suitable candidates prefer capacity on {names}"
         if reds:
             rule += f"; no new work on {', '.join(reds)}"
+    preferred = [v for v in greenest if vendors[v].get("policy", {}).get("prefer")
+                 and levels[v] == "green" and vendors[v].get("status") == "ok"]
+    if preferred:
+        prefer = "+".join(greenest)
+        rule += "; user policy favors " + "+".join(preferred) + " among suitable choices; other listed vendors remain eligible"
     res = {v: (l or "unknown") for v, l in levels.items()}
-    res.update({"prefer": prefer, "rule": rule, "notes": notes})
+    res.update({"prefer": prefer, "policy_preferred": preferred, "rule": rule, "notes": notes})
     return res
 
 
@@ -633,9 +714,18 @@ def text_report(snap):
             continue
         head = f"{v:6s} {d['status']:11s} plan={d.get('plan')} level={d.get('level', '-')} via {d.get('source')}"
         head += f"; observed {d.get('observed_at', 'unknown')} (age {d.get('age_seconds', 'unknown')}s)"
+        if "routing_level" in d:
+            head += f"; routing={d['routing_level'] or 'unknown'}"
         lines.append(head)
+        enabled = [f"{k}={value}" if k == "reserve_percent" else k for k, value in d.get("policy", {}).items() if value]
+        if enabled:
+            lines.append("   policy: " + ", ".join(enabled))
+        for note in d.get("policy_notes", []):
+            lines.append("   policy: " + note)
         for w in d.get("windows", []):
             pct = "  -- " if w["percent"] is None else f"{w['percent']:5.1f}%"
+            if w.get("reserve_percent") and w.get("actual_percent") is not None:
+                pct += f" routing (actual {w['actual_percent']}%, +{w['reserve_percent']}pp reserve)"
             exp = f" (expected {w['expected_percent_now']}%, {w['pace']})" if w.get("expected_percent_now") is not None else ""
             reset = (f"resets in {w['resets_in']}" if w.get("resets_in") else
                      f"resets {w['reset_label']}" if w.get("reset_label") else "reset time unknown")
@@ -660,10 +750,19 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--vendor", choices=[*VENDORS, "all"], default="all")
     ap.add_argument("--text", action="store_true", help="human summary instead of JSON")
-    ap.add_argument("--no-refresh", action="store_true", help="do not spend a Haiku call to refresh an expired Claude token")
+    ap.add_argument("--no-refresh", action="store_true", help="do not refresh Claude/Grok tokens")
     ap.add_argument("--no-cache", action="store_true", help="always query live")
     ap.add_argument("--cache-ttl", type=int, default=CACHE_TTL, help="seconds a successful vendor read is reused (default 900)")
+    ap.add_argument("--policy", default=POLICY_FILE, help="vendor override JSON (default: usage-policy.json in skill directory)")
     args = ap.parse_args()
+    try:
+        policy = load_policy(args.policy)
+    except (OSError, ValueError) as e:
+        ap.error(f"cannot read usage policy: {e}")
+    def progress(message):
+        if args.text:
+            print(f"usage: {message}", file=sys.stderr, flush=True)
+
     os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
 
     def collect(prev):
@@ -674,8 +773,9 @@ def main():
         now = time.time()
         vendors = {}
         cached = []
+        pending = []
         readers = {"claude": lambda: read_claude(allow_refresh=not args.no_refresh),
-                   "codex": read_codex, "gemini": read_gemini, "cursor": read_cursor}
+                   "codex": read_codex, "gemini": read_gemini, "cursor": lambda: read_cursor(allow_refresh=not args.no_refresh)}
         for name in VENDORS if args.vendor == "all" else (args.vendor,):
             old = saved.get(name)
             fetched = epochs.get(name, prev.get("generated_epoch", 0))
@@ -688,13 +788,33 @@ def main():
                     and 0 <= now - fetched < ttl and not reset_passed):
                 vendors[name] = dict(old)
                 cached.append(name)
+                progress(f"{name}: using cached result")
             else:
-                vendors[name] = readers[name]()
-                fetched = time.time()
-                saved[name] = dict(vendors[name])
-                epochs[name] = fetched
-            vendors[name]["observed_at"] = iso(dt.datetime.fromtimestamp(fetched, dt.timezone.utc))
-            vendors[name]["age_seconds"] = max(0, round(time.time() - fetched))
+                pending.append(name)
+        # Only cache misses perform I/O. The process lock still deduplicates other callers.
+        if pending:
+            with ThreadPoolExecutor(max_workers=len(pending)) as pool:
+                futures = {}
+                for name in pending:
+                    progress(f"{name}: reading quota" + (" (shared Grok billing API)" if name == "cursor" else ""))
+                    futures[pool.submit(readers[name])] = name
+                for future in as_completed(futures):
+                    name = futures[future]
+                    try:
+                        vendors[name] = future.result()
+                    except Exception as e:
+                        vendors[name] = {"vendor": name, "status": "unavailable", "windows": [],
+                                         "notes": [f"quota reader failed: {type(e).__name__}: {e}"]}
+                    progress(f"{name}: {vendors[name]['status']}")
+                    epochs[name] = time.time()
+                    saved[name] = dict(vendors[name])
+        # Stable output order regardless of completion order.
+        vendors = {name: vendors[name] for name in VENDORS if name in vendors}
+        for name, vendor in vendors.items():
+            fetched = epochs.get(name, prev.get("generated_epoch", 0))
+            vendor["observed_at"] = iso(dt.datetime.fromtimestamp(fetched, dt.timezone.utc))
+            vendor["age_seconds"] = max(0, round(time.time() - fetched))
+        apply_policy(vendors, policy)
         snap = {"generated_at": iso(now_utc()), "generated_epoch": time.time(),
                 "vendors": vendors, "advice": advise(vendors)}
         if cached:
@@ -702,9 +822,13 @@ def main():
             snap["cached_vendors"] = cached
         return snap, {"cache_version": CACHE_VERSION, "vendors": saved, "vendor_epochs": epochs}
 
-    # Serialize reads as well as writes so simultaneous chats share one live fetch.
+    # Serialize collection batches across processes; vendors within each batch run concurrently.
     with open(CACHE_LOCK, "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            progress("waiting for another usage process to finish")
+            fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             with open(CACHE_FILE) as f:
                 prev = json.load(f)

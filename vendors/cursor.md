@@ -75,8 +75,13 @@ Do not call cancel-then-prompt seamless steering, or start a duplicate CLI again
 
 ## Quota
 
-`cursor-agent` shows plan usage on its interactive `/usage` screen. In print mode, `/usage` is
-sent to the model as an ordinary prompt (seen 2026-11-02). `scripts/usage` opens a short-lived
-local terminal, reads the interactive screen without a model turn, and reports the included plan
-percentage and reset date. The exact reset time is not exposed. The result is cached for 15 minutes;
-if the screen cannot be read, the quota is unknown and should be treated as yellow.
+`scripts/usage` reads the shared Cursor/Grok pool directly from Grok's billing endpoint,
+using the login in `~/.grok/auth.json` (or `$GROK_HOME/auth.json`). This account's live response
+includes Cursor, GrokBuild, GrokChat and GrokTasks contributions to one weekly total. It provides
+exact period timestamps for reset and pace calculations, without terminal automation or inference.
+The vendor key remains `cursor`; only the shared total is reported.
+
+Successful reads are cached for 15 minutes. Requests have a 10-second timeout; an authentication
+failure permits one bounded CLI initialization to refresh the token, then one retry. `--no-refresh`
+disables that refresh. Missing usage, ambiguous account credentials or failed reads stay unknown.
+Legacy accounts may have different pools; this endpoint describes the logged-in Grok account.

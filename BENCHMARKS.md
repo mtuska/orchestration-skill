@@ -105,6 +105,31 @@ establish a clear ranking. Credit: Epoch AI, CC BY 4.0. Composer 2.5 was absent 
 | GPT-6 Luna | 156.68 | 154.78–158.74 |
 | Grok 4.7 | 156.07 | 154.20–158.03 |
 
+## LLM Stats
+
+[Leaderboard](https://llm-stats.com/) · [methodology v3.1](https://llm-stats.com/methodology/llm-stats-score),
+retrieved 2026-11-06. Conservative composite ratings (higher is better, not percentages).
+Category indexes use different benchmark subsets; effort is unspecified in this export.
+Evidence mixes lab-reported, third-party and verified results; overlap with other sources is
+not independent confirmation. Composer 2.5 was absent from the fetched data.
+
+| Model | LLM Stats | Reasoning | Coding | Agent |
+|---|---|---|---|---|
+| Claude Fable 5.1 | 52.8 | 50.1 | 35.7 | 38.3 |
+| Claude Opus 5.5 | 59.9 | 58.5 | 51.0 | 45.7 |
+| Claude Sonnet 5.5 | 57.9 | 56.0 | 48.7 | 43.5 |
+| Claude Haiku 5.5 | 49.4 | 46.5 | 39.3 | 33.8 |
+| GPT-6 Astra | 57.3 | 55.7 | 46.7 | 44.3 |
+| GPT-6 Sol | 47.5 | 44.2 | 34.0 | 35.0 |
+| GPT-6.1 Sol | 53.4 | 50.7 | 39.6 | 38.1 |
+| GPT-6.1 Terra | 47.6 | 49.1 | 37.3 | 38.7 |
+| GPT-6 Luna | 43.1 | 39.2 | 29.7 | 30.4 |
+| Gemini 4 Argon | 54.4 | 51.9 | 43.4 | 41.3 |
+| Gemini 3.8 Flash | 48.9 | 46.0 | 34.9 | 34.2 |
+| Grok 4.7 | 46.2 | 41.8 | 35.6 | 33.7 |
+| Grok 4.6 | 44.3 | 46.0 | 33.4 | 34.1 |
+| Composer 2.5 | — | — | — | — |
+
 Keep this file to one table per source. Add models to the relevant table, retain dates and effort,
 and refresh sources before changing routing. Detailed historical scores, pricing and caveats are
 preserved in the [research snapshot](references/benchmark-snapshot-2026-11-06.txt); read it only

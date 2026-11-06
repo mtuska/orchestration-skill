@@ -73,8 +73,19 @@ reasoning the assignment actually requires. Do not automatically choose maximum 
 
 ## Quota and escalation
 
+`usage-policy.json` is the user's editable per-vendor policy, applied on every usage run even
+with cached measurements. Use `routing_level` and policy notes for shared-account eligibility;
+`level` preserves the measured quota warning. `ignore_pace` bypasses pace restrictions, `prefer`
+favors suitable models on that vendor, and `allow_credits` authorizes existing credits only.
+Credit-based continuation currently requires Codex's positive credit balance and affirmative
+service availability. Other vendors retain exhaustion checks until their credit availability is
+verified. `reserve_percent` reduces available headroom by that many percentage points (0–100), for any
+vendor; Claude currently reserves 10. Missing reserves default to 0 and switches to false.
+Edit `usage-policy.json` or use `--policy <path>`.
+These options never authorize purchases, spending-limit increases or reset-credit redemption.
+
 - Inspect shared and model-specific limits. A red model bucket excludes its affected models, not
-  every model on that account. A red shared limit excludes all models drawing from it.
+  every model on that account. A red shared routing level excludes all models drawing from it.
 - Prefer healthy capacity among suitable candidates; do not automatically upgrade to a premium
   model on another provider when an economical model remains eligible.
 - Unknown or stale quota is uncertainty, not free capacity. Prefer a suitable measured account;

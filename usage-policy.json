@@ -1,0 +1,26 @@
+{
+  "claude": {
+    "ignore_pace": false,
+    "prefer": false,
+    "allow_credits": false,
+    "reserve_percent": 10
+  },
+  "codex": {
+    "ignore_pace": true,
+    "prefer": true,
+    "allow_credits": true,
+    "reserve_percent": 0
+  },
+  "gemini": {
+    "ignore_pace": false,
+    "prefer": false,
+    "allow_credits": false,
+    "reserve_percent": 0
+  },
+  "cursor": {
+    "ignore_pace": false,
+    "prefer": false,
+    "allow_credits": false,
+    "reserve_percent": 0
+  }
+}
