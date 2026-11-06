@@ -22,6 +22,9 @@ def result(status='ok', level='green'):
 
 class CacheTests(unittest.TestCase):
     def setUp(self):
+        installed = patch.object(u.shutil, 'which', side_effect=lambda command: '/fake/bin/' + command)
+        installed.start()
+        self.addCleanup(installed.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         for name, value in [('CACHE_DIR', self.tmp.name), ('CACHE_FILE', self.tmp.name + '/last.json'),
@@ -36,6 +39,26 @@ class CacheTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 u.main()
         return json.loads(output.getvalue())
+
+    def test_missing_cli_bypasses_cache_and_recovers_after_install(self):
+        with patch.object(u, 'read_claude', return_value=result()) as reader:
+            self.call()
+            with patch.object(u.shutil, 'which', return_value=None):
+                missing = self.call()
+                self.assertEqual(missing['vendors']['claude']['status'], 'not_installed')
+                self.assertEqual(missing['advice']['prefer'], 'neither')
+                self.assertEqual(reader.call_count, 1)
+            self.call()
+            self.assertEqual(reader.call_count, 2)
+
+    def test_missing_vendors_are_excluded_from_advice(self):
+        vendors = {v: {'status': 'not_installed'} for v in u.VENDORS}
+        vendors['cursor'] = {'status': 'ok', 'level': 'green'}
+        advice = u.advise(vendors)
+        self.assertEqual(advice['prefer'], 'cursor')
+        self.assertEqual(advice['codex'], 'not_installed')
+        vendors['cursor'] = {'status': 'not_installed'}
+        self.assertEqual(u.advise(vendors)['prefer'], 'neither')
 
     def test_vendor_reads_overlap_and_cache_skips_them(self):
         barrier = threading.Barrier(4, timeout=3)

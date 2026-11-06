@@ -2,6 +2,8 @@
 """usage: plan-quota snapshot for Claude (claude.ai OAuth), Codex (ChatGPT), Gemini (Antigravity) and Cursor in one JSON.
 
 Companion to the orchestration skill. Read-only, stdlib only.
+Checks claude, codex, agy and cursor-agent on PATH before reading quotas.
+Missing CLIs are reported as not_installed and excluded from routing.
 
   usage                 # JSON for every vendor, with a routing hint
   usage --text          # short human summary
@@ -21,6 +23,7 @@ import math
 import os
 import re
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -572,6 +575,7 @@ def read_cursor(allow_refresh=True):
 # ---------------------------------------------------------------- advice
 
 VENDORS = ("claude", "codex", "gemini", "cursor")
+VENDOR_COMMANDS = {"claude": "claude", "codex": "codex", "gemini": "agy", "cursor": "cursor-agent"}
 LEVEL_RANK = {"green": 0, "yellow": 1, "red": 2, None: 1}  # unknown counts as yellow
 
 
@@ -659,6 +663,21 @@ def routing_level(d):
 
 
 def advise(vendors):
+    installed = {v: d for v, d in vendors.items() if d.get("status") != "not_installed"}
+    missing = {v: "not_installed" for v in vendors if v not in installed}
+    if not installed:
+        return {**missing, "prefer": "neither", "policy_preferred": [],
+                "rule": "no selected vendor CLI is installed; no routing candidates", "notes": []}
+    advice = advise_installed(installed)
+    if missing:
+        advice.update(missing)
+        advice["rule"] += "; not installed: " + ", ".join(missing)
+        if advice["prefer"] in ("either", "n/a") and len(vendors) > 1:
+            advice["prefer"] = "+".join(v for v in installed if advice.get(v) != "red") or "neither"
+    return advice
+
+
+def advise_installed(vendors):
     levels = {v: (routing_level(vendors[v]) if vendors[v]["status"] in ("ok", "stale") else None)
               for v in VENDORS if v in vendors}
     notes = []
@@ -777,6 +796,14 @@ def main():
         readers = {"claude": lambda: read_claude(allow_refresh=not args.no_refresh),
                    "codex": read_codex, "gemini": read_gemini, "cursor": lambda: read_cursor(allow_refresh=not args.no_refresh)}
         for name in VENDORS if args.vendor == "all" else (args.vendor,):
+            command = VENDOR_COMMANDS[name]
+            if shutil.which(command) is None:
+                vendors[name] = {"vendor": name, "status": "not_installed", "windows": [],
+                                 "notes": [f"{command} not found on PATH; skipped"]}
+                saved.pop(name, None)
+                epochs[name] = now
+                progress(f"{name}: not installed ({command}); skipped")
+                continue
             old = saved.get(name)
             fetched = epochs.get(name, prev.get("generated_epoch", 0))
             ttl = args.cache_ttl if isinstance(old, dict) and old.get("status") == "ok" else FAILURE_TTL
