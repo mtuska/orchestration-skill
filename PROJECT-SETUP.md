@@ -94,6 +94,11 @@ of waiting for an unattended approval; it does not grant access. Keep `-s read-o
 reviews; the workspace-write network setting is not a read-only network switch. If a review
 needs networked tests, the parent can run them in the configured build environment.
 
+On resume, explicitly repeat the approved network setting and extra writable roots from this
+file; project trust alone did not preserve them in the reported probe. See the
+[Codex resume recipe](vendors/codex.md#resume-network-and-writable-roots). Keep settings persistent
+in the project and reuse the thread, supplying the overrides at launch rather than rewriting files.
+
 `--add-dir` adds writable roots, not network permission. `--search` enables a model tool, not
 shell sockets. `-s danger-full-access` removes filesystem/network sandbox restrictions; it is
 not the normal fix for networked tests. Use it only for an explicitly appropriate authorized

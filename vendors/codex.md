@@ -50,6 +50,35 @@ the assignment. Luna produced intermediate progress, retained its thread ID and 
 marker without rereading it. The resumed write probe reported sandbox rejection; no canary was
 created. This tests the specified launch configuration, not implicit permission inheritance.
 
+### Resume network and writable roots
+
+User-reported probe (2026-11-06): a Luna thread started in a trusted workspace could bind a UDP
+socket, but resuming it failed with `PermissionError` in two launch forms. Explicit network
+configuration on resume resolved the reported issue. This is evidence not to rely on project
+sandbox-setting inheritance during resume, not proof that every Codex version drops those settings.
+
+Reuse an appropriate completed thread. For workspace-write workers, repeat the authorized network
+setting and complete extra writable-root list explicitly on **every resume**, taking their values
+from the project's approved `.codex/config.toml` and worker record. Keep the project file as the
+source of truth; these launch overrides reproduce it, rather than granting additional access.
+For example, for a task that already needs network and the illustrated extra output directory:
+
+```bash
+codex -a never -s workspace-write -C /absolute/project \
+  -c 'sandbox_workspace_write.network_access=true' \
+  -c 'sandbox_workspace_write.writable_roots=["/absolute/build-output"]' \
+  exec resume <thread_id> --skip-git-repo-check -m <selected-model> --json - \
+  < <task-dir>/followup.txt > <task-dir>/followup.jsonl 2> <task-dir>/followup.stderr
+```
+
+Substitute actual approved paths; use `false` for offline tasks and `[]` when no extra writable
+roots are needed. Do not copy this workspace-write example into a read-only reviewer launch.
+After resume, repeat the minimal required socket/output-write probe inside the worker's execution
+environment before starting expensive tests. Check errors and effective access, not just accepted
+CLI syntax. If the explicit settings still fail, diagnose host restrictions or run the check in
+the parent's authorized environment. Do not discard useful context and start a new thread solely
+as a permissions workaround. This workaround has not been independently rerun by this skill update.
+
 `codex queue` is separate from live steering; `--resume` can warn while still exiting zero.
 App-server `turn/steer` requires the active thread/turn on the owning server. Do not assume a new
 app-server controls an existing `exec` worker. Neither path is runtime-validated here.
