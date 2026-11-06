@@ -88,9 +88,11 @@ steering, ACP cancellation and concurrently resuming an active turn are not vali
 
 ### Required read-only profile
 
-Store this profile in the task's artifact directory and pass it with `--settings` on **every**
-initial and resumed read-only launch. Do not modify global settings or merge in command/MCP allows.
-The parent creates the directory and profile; the worker must not change them.
+Store this native settings profile once in `<workdir>/.agents/agy-readonly.json` and pass it with
+`--settings` on **every** initial and resumed read-only launch. Keep it separate from the project's
+build profile. A task-local file is a fallback for one-off work. Do not modify global settings or
+merge in command/MCP allows. The parent maintains the profile; the worker must not change it.
+See [project permissions](../PROJECT-SETUP.md#gemini-through-antigravity) for network and path grants.
 
 ```json
 {
@@ -103,7 +105,7 @@ The parent creates the directory and profile; the worker must not change them.
 ```
 
 ```bash
-agy --model gemini-3.8-flash-low --settings <task-dir>/readonly.json --output-format stream-json --print-timeout 900s -p "$(cat <task-dir>/prompt.txt)" < /dev/null > <task-dir>/events.jsonl 2> <task-dir>/stderr.log
+agy --model gemini-3.8-flash-low --settings <workdir>/.agents/agy-readonly.json --output-format stream-json --print-timeout 900s -p "$(cat <task-dir>/prompt.txt)" < /dev/null > <task-dir>/events.jsonl 2> <task-dir>/stderr.log
 ```
 
 Run from the intended workspace. For follow-up, add `--conversation <conversation_id>` and use

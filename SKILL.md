@@ -33,7 +33,19 @@ Read the selected vendor's launch and result-collection instructions before disp
 [Cursor](vendors/cursor.md). Use only model IDs actually supported by the host or CLI.
 Check required paths, services, commands and network access before launch. Preserve read-only
 roles and existing authorization. A failed tool call does not authorize broader permissions.
-See [PROJECT-SETUP.md](PROJECT-SETUP.md) when a vendor needs project command permissions.
+Use the vendor's persistent project-local permission files before adding per-launch overrides;
+see [PROJECT-SETUP.md](PROJECT-SETUP.md) for file locations, read/write roles, network controls
+and preflight. Preserve the orchestrator's existing access: never tighten settings it also loads
+just to restrict a worker. Use worker-only flags/overlays or a separate workspace for narrower
+roles; change the parent's permissions only when explicitly requested by the user.
+The orchestrator may register the current project's exact canonical path as trusted in Codex's
+user config after inspecting its `.codex` settings, hooks and rules; this narrow global-config
+exception does not permit changing global permissions or overriding intentional distrust.
+Follow the trust-registration procedure in PROJECT-SETUP.md.
+Reuse approved settings across workers and resumes. Configure required build
+outputs, caches and socket access before assigning tests. If the worker cannot run required
+checks, resolve the permissions or run them through the parent within existing authorization;
+do not automatically leave the suite to the user. A claimed sandbox failure requires evidence.
 
 ## Choose by the decisions still needed
 

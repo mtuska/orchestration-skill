@@ -14,7 +14,7 @@ Call the CLI as `cursor-agent`. On this machine `agent` on the PATH is Grok's ow
 
 Every kind of work: reading, review, planning, editing and implementation. Setup facts:
 
-- **Read-only is enforced by mode.** `--mode ask` (questions, read-only) and `--mode plan`
+- **Read-only tool behavior is selected by mode.** `--mode ask` (questions, read-only) and `--mode plan`
   (planning, no edits) are the CLI's read-only modes. Seen on 2026-11-02: both Grok 4.7 and
   Composer 2.5 answered a file question correctly in `ask` mode with the workspace unchanged.
 - **Edits work in the default mode.** Without `--mode`, print mode (`-p`) has write and shell tools.
@@ -46,7 +46,9 @@ cursor-agent -p "$(cat <task-dir>/prompt.md)" --model grok-4.7-high --mode ask -
   work that must edit files, and then say exactly which files it may change.
 - `--trust` skips the workspace trust prompt that would otherwise block a headless run.
   `--workspace` is the root it works in; `--add-dir` adds another. `--sandbox enabled` turns on the
-  CLI's sandbox (off in this user's config).
+  CLI's sandbox. Prefer persistent `.cursor/cli.json` tool rules and `.cursor/sandbox.json`
+  filesystem/network settings; see [project permissions](../PROJECT-SETUP.md#cursor--grok--composer-through-cursor-agent).
+  Verify the effective sandbox rather than relying on a user's current global default.
 - Read the result: exit status 0 and `is_error: false`, then `result` is the answer text. Grok may
   put a sentence of preamble before the answer in `result`, so ask for the answer on its own line.
   `session_id` resumes the conversation with `--resume <id>`; `usage` has token counts.

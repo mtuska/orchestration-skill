@@ -5,7 +5,9 @@ Models: GPT-6 Astra, GPT-6 Sol, GPT-6 Luna. Scores and prices are in `../BENCHMA
 ## What it can do in this harness
 
 Reads, edits, builds and tests inside the sandbox you give it. The sandbox is enforced by the CLI,
-so `-s read-only` really is read-only.
+so `-s read-only` constrains filesystem writes. Workspace-write does not by itself establish
+network access. Prefer `.codex/config.toml` for stable project defaults and select the role with
+`-s`; see [project permissions](../PROJECT-SETUP.md#codex).
 
 ## How to launch
 
@@ -17,6 +19,9 @@ codex exec --skip-git-repo-check -m gpt-6-sol -s workspace-write -C <workdir> -o
 ```
 
 - `-m gpt-6-astra | gpt-6-sol | gpt-6-luna`.
+- Project configuration is loaded only for trusted projects; verify it was applied. The parent
+  may add the exact current project trust entry to Codex's user config under the
+  [trust exception](../PROJECT-SETUP.md#codex-project-trust-exception); do not broaden global permissions.
 - Sandbox, least access first: `-s read-only` for reviews and diagnosis; `-s workspace-write` for
   edits, builds and tests, adding `--add-dir <dir>` for each extra directory it must write;
   `-s danger-full-access` only when the task requires it and existing user authorization covers it.

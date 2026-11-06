@@ -6,6 +6,13 @@ Models: Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5. Scores and prices are in `..
 
 Everything the session's own tools allow: read, edit, run builds and tests, drive the browser.
 Claude subagents inherit the session's permission settings; confirm the chosen agent type's tools.
+For CLI workers, prefer `.claude/settings.json` (machine-local additions in
+`.claude/settings.local.json`) rather than repeating grants on every launch. See
+[project permissions](../PROJECT-SETUP.md#claude) for tool rules, sandbox/network settings and
+headless execution. File-edit approval does not imply shell/network access.
+When Claude is also the orchestrator, keep shared project settings compatible with the parent.
+Put worker restrictions in its launch/tool selection or a worker-only overlay/worktree, not in
+shared deny rules that could remove the orchestrator's own access.
 
 ## How to launch
 
