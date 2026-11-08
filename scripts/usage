@@ -4,6 +4,8 @@
 Companion to the orchestration skill. Read-only, stdlib only.
 Checks claude, codex, agy and cursor-agent on PATH before reading quotas.
 Missing CLIs are reported as not_installed and excluded from routing.
+Track weekly quota and credits only; short-window pace does not affect routing.
+Explicit service rejections and spending controls still apply.
 
   usage                 # JSON for every vendor, with a routing hint
   usage --text          # short human summary
@@ -37,13 +39,13 @@ CACHE_FILE = os.path.join(CACHE_DIR, "last.json")
 CACHE_LOCK = os.path.join(CACHE_DIR, "last.lock")
 CACHE_TTL = 15 * 60
 FAILURE_TTL = 60
-CACHE_VERSION = 8
+CACHE_VERSION = 9
 CLAUDE_CREDS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(HOME, ".claude")), ".credentials.json")
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.join(HOME, ".codex"))
 
-PACE_YELLOW = 1.3  # 30% above expected consumption at this point in the window
-PACE_RED = 1.5     # 50% above expected consumption
+PACE_YELLOW = 1.15  # 15% above expected consumption at this point in the window
+PACE_RED = 1.35     # 35% above expected consumption
 
 
 def now_utc():
@@ -95,6 +97,8 @@ def window(wid, label, percent, resets_at, duration_s, active=None, extra=None):
         frac = min(1.0, max(0.0, frac))
         expected = frac * 100
         w["expected_percent_now"] = round(expected, 1)
+        if float(percent) == 0 and expected < 2:
+            w["pace"] = "on" if expected == 0 else "behind"
         if expected >= 2:
             ratio = float(percent) / expected
             w["pace_ratio"] = round(ratio, 2)
@@ -113,7 +117,9 @@ def level_for(windows, hard_stop=False):
         ratio = w.get("pace_ratio")
         if p is not None and p >= 100:
             return "red"  # exhausted, including reserved capacity
-        if p is None or ratio is None:
+        if p == 0 and w.get("expected_percent_now") is not None:
+            levels.append("green")  # fresh, unused quota needs no unstable early-window ratio
+        elif p is None or ratio is None:
             levels.append(None)
         elif ratio >= PACE_RED:
             return "red"
@@ -196,6 +202,8 @@ def read_claude(allow_refresh):
     if isinstance(limits, list) and limits:
         for i, lim in enumerate(limits):
             kind = lim.get("kind")
+            if not str(kind).startswith("weekly"):
+                continue
             dur = 5 * 3600 if kind == "session" else 7 * 86400 if str(kind).startswith("weekly") else None
             label = {"session": "5-hour", "weekly_all": "weekly all models"}.get(kind, kind)
             scope = (lim.get("scope") or {}).get("model") or {}
@@ -216,7 +224,7 @@ def read_claude(allow_refresh):
                 if lim.get("severity") in ("exceeded", "critical", "locked"):
                     hard_stop = True
     else:  # older shape
-        for key, label, dur in (("five_hour", "5-hour", 5 * 3600), ("seven_day", "weekly all models", 7 * 86400),
+        for key, label, dur in (("seven_day", "weekly all models", 7 * 86400),
                                 ("seven_day_opus", "weekly Opus", 7 * 86400), ("seven_day_sonnet", "weekly Sonnet", 7 * 86400)):
             v = data.get(key)
             if isinstance(v, dict) and v.get("utilization") is not None:
@@ -315,7 +323,9 @@ def bucket_windows(rl, g, prefix="codex", suffix=""):
         w = rl.get(key)
         if isinstance(w, dict):
             mins = g(w, "windowDurationMins", "window_minutes") or g(w, "windowDurationMins", "window_duration_mins")
-            dur = mins * 60 if mins else None
+            if mins != 7 * 24 * 60:
+                continue  # primary can be weekly; classify by duration, not slot name
+            dur = mins * 60
             lab = label
             if mins:
                 lab = f"{int(mins/60)}-hour" if mins < 1440 * 2 else f"{round(mins/1440)}-day"
@@ -361,9 +371,6 @@ def norm_codex(rl, camel, by_id=None, ordinary_allowed=None, reset_credits=None)
         resets = parse_ts(g(il, "resetsAt", "resets_at"))
         individual = {"limit": limit, "used": used, "remaining_percent": g(il, "remainingPercent", "remaining_percent"),
                       "resets_at": iso(resets) if resets else None}
-        # Window length is unknown (monthly in practice); use the reset to estimate 30 days.
-        windows.append(window("codex_individual", "individual limit", pct, resets, 30 * 86400,
-                              extra={"pace_basis": "estimated 30-day window ending at reset"}))
     credits = rl.get("credits") or {}
     has_credits = g(credits, "hasCredits", "has_credits")
     reached = g(rl, "rateLimitReachedType", "rate_limit_reached_type")
@@ -453,6 +460,8 @@ def read_gemini():
         counts = gname.lower() in GEMINI_LEVEL_GROUPS
         bw = []
         for b in grp.get("buckets") or []:
+            if b.get("window") != "weekly":
+                continue
             frac = b.get("remaining_fraction")
             used = None if frac is None else (1 - float(frac)) * 100
             label = f"{'5-hour' if b.get('window') == '5h' else b.get('window') or '?'} ({gname})"
@@ -633,22 +642,26 @@ def apply_policy(vendors, policy):
         if d.get("status") != "ok":
             d["policy_notes"].append("override cannot establish availability from stale or missing quota")
             continue
-        blocked = (d.get("hard_stop") or d.get("spend_control_reached")
-                   or d.get("ordinary_usage_allowed") is False or d.get("rate_limit_reached_type"))
-        if blocked:
-            d["routing_level"] = "red"
-            d["policy_notes"].append("service block or spending limit remains in effect")
-            continue
         windows = [w for w in d.get("windows", []) if not w.get("bucket")]
         exhausted = any((w.get("percent") or 0) >= 100 for w in windows)
         credits = d.get("credits") or {}
+        # Ordinary usage is the included allowance, not credit-backed availability.
+        included_block = (d.get("rate_limit_reached_type") == "rate_limit_reached"
+                          or d.get("ordinary_usage_allowed") is False or exhausted)
         credit_ready = (name == "codex" and opts["allow_credits"]
-                        and d.get("ordinary_usage_allowed") is True
+                        and d.get("spend_control_reached") is False
+                        and d.get("rate_limit_reached_type") in (None, "rate_limit_reached")
                         and credits.get("has_credits") is True
                         and (credits.get("unlimited") is True or (credits.get("balance") or 0) > 0))
-        if exhausted and credit_ready:
+        blocked = (d.get("hard_stop") or d.get("spend_control_reached")
+                   or d.get("ordinary_usage_allowed") is False or d.get("rate_limit_reached_type"))
+        if included_block and credit_ready:
             d["routing_level"] = "green"
-            d["policy_notes"].append("included quota exhausted; existing credits authorized and service allows usage")
+            d["policy_notes"].append("included quota unavailable; route using authorized existing credits")
+        elif blocked:
+            d["routing_level"] = "red"
+            d["policy_notes"].append("service block or spending limit remains in effect")
+            continue
         elif opts["ignore_pace"] and not exhausted and windows and all(w.get("percent") is not None for w in windows):
             d["routing_level"] = "green"
             d["policy_notes"].append("pace restriction ignored by user policy")
@@ -731,7 +744,7 @@ def text_report(snap):
         d = snap["vendors"].get(v)
         if not d:
             continue
-        head = f"{v:6s} {d['status']:11s} plan={d.get('plan')} level={d.get('level', '-')} via {d.get('source')}"
+        head = f"{v:6s} {d['status']:11s} plan={d.get('plan')} quota_level={d.get('level', '-')} via {d.get('source')}"
         head += f"; observed {d.get('observed_at', 'unknown')} (age {d.get('age_seconds', 'unknown')}s)"
         if "routing_level" in d:
             head += f"; routing={d['routing_level'] or 'unknown'}"

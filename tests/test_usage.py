@@ -187,14 +187,28 @@ class PolicyTests(unittest.TestCase):
         u.apply_policy(vendors, {})
         self.assertEqual(d['routing_level'], 'red')
 
-    def test_credits_require_permission_balance_and_service_availability(self):
+    def test_credits_require_permission_balance_and_no_spend_block(self):
         for allowed, balance, service, expected in [(True, 20, True, 'green'),
-                (False, 20, True, 'red'), (True, 0, True, 'red'), (True, 20, False, 'red'),
-                (True, 20, None, 'red')]:
+                (False, 20, True, 'red'), (True, 0, True, 'red'), (True, 20, False, 'green'),
+                (True, 20, None, 'green')]:
             d = {'status': 'ok', 'level': 'red', 'windows': [{'percent': 100}],
-                 'ordinary_usage_allowed': service, 'credits': {'has_credits': True, 'balance': balance}}
+                 'ordinary_usage_allowed': service, 'spend_control_reached': False, 'credits': {'has_credits': True, 'balance': balance}}
             u.apply_policy({'codex': d}, {'codex': {'ignore_pace': True, 'allow_credits': allowed}})
             self.assertEqual(d['routing_level'], expected)
+
+    def test_live_codex_exhausted_allowance_with_credits(self):
+        for spend, kind, expected in [(False, 'rate_limit_reached', 'green'),
+                                      (True, 'rate_limit_reached', 'red'),
+                                      (None, 'rate_limit_reached', 'red'),
+                                      (False, 'unknown_block', 'red')]:
+            d = {'status': 'ok', 'level': 'red', 'hard_stop': True,
+                 'ordinary_usage_allowed': False, 'rate_limit_reached_type': kind,
+                 'spend_control_reached': spend, 'windows': [{'percent': 100}],
+                 'credits': {'has_credits': True, 'balance': 14659.49195}}
+            u.apply_policy({'codex': d}, {'codex': {'allow_credits': True, 'prefer': True}})
+            self.assertEqual(d['routing_level'], expected)
+            self.assertEqual(d['level'], 'red')
+            self.assertEqual(u.advise({'codex': d})['codex'], expected)
 
     def test_blocks_stale_and_unknown_not_overridden(self):
         for extra in [{'hard_stop': True}, {'status': 'stale'}, {'spend_control_reached': True}]:
@@ -216,10 +230,54 @@ class PolicyTests(unittest.TestCase):
                     u.load_policy(path)
 
 
+class WeeklyTrackingTests(unittest.TestCase):
+    def test_claude_short_window_does_not_block_weekly(self):
+        with patch.object(u, 'claude_token', return_value=('fake', {}, None)), \
+             patch.object(u.urllib.request, 'urlopen', return_value=io.StringIO(json.dumps({'limits': [
+                 {'kind': 'session', 'percent': 100, 'severity': 'locked'},
+                 {'kind': 'weekly_all', 'percent': 0}]}))):
+            r = u.read_claude(False)
+        self.assertEqual([w['id'] for w in r['windows']], ['weekly_all'])
+        self.assertFalse(r['hard_stop'])
+
+    def test_codex_classifies_by_duration_not_primary_secondary(self):
+        for weekly_slot, short_slot in [('primary', 'secondary'), ('secondary', 'primary')]:
+            r = u.norm_codex({weekly_slot: {'usedPercent': 10, 'windowDurationMins': 10080},
+                              short_slot: {'usedPercent': 100, 'windowDurationMins': 300}}, True)
+            self.assertEqual(len(r['windows']), 1)
+            self.assertEqual(r['windows'][0]['percent'], 10)
+            self.assertEqual(r['binding']['percent'], 10)
+
+    def test_gemini_short_window_is_omitted(self):
+        data = {'groups': [{'name': 'Gemini Models', 'buckets': [
+            {'id': 'short', 'window': '5h', 'remaining_fraction': 0},
+            {'id': 'week', 'window': 'weekly', 'remaining_fraction': 1}]}]}
+        with patch.object(u, 'agy_command', side_effect=[data, {}]):
+            r = u.read_gemini()
+        self.assertEqual([w['id'] for w in r['windows']], ['gemini_week'])
+        self.assertEqual(r['binding']['percent'], 0)
+
+
 class PaceTests(unittest.TestCase):
+    def test_fresh_zero_usage_is_green_without_ratio(self):
+        now = u.now_utc()
+        for duration in (5 * 3600, 7 * 86400):
+            for elapsed_fraction in (0, 0.00001, 0.019):
+                with patch.object(u, 'now_utc', return_value=now):
+                    reset = now + u.dt.timedelta(seconds=duration * (1 - elapsed_fraction))
+                    w = u.window('quota', 'quota', 0, reset, duration)
+                    self.assertIsNone(w['pace_ratio'])
+                    self.assertEqual(u.level_for([w]), 'green')
+                    self.assertEqual(u.level_for([w], hard_stop=True), 'red')
+                    d = {'status': 'ok', 'windows': [w]}
+                    u.apply_policy({'gemini': d}, {})
+                    self.assertEqual(d['routing_level'], 'green')
+        self.assertIsNone(u.level_for([u.window('quota', 'quota', 0, None, None)]))
+        self.assertIsNone(u.level_for([u.window('quota', 'quota', None, now, 3600)]))
+
     def test_levels_follow_pace_not_absolute_usage(self):
         for used, ratio, expected in [(95, 1.0, 'green'), (15, 1.5, 'red'),
-                                      (13, 1.3, 'yellow'), (60, 1.2, 'green'),
+                                      (13, 1.3, 'yellow'), (60, 1.1, 'green'),
                                       (100, 1.0, 'red'), (50, None, None)]:
             with self.subTest(used=used, ratio=ratio):
                 self.assertEqual(u.level_for([{'percent': used, 'pace_ratio': ratio}]), expected)

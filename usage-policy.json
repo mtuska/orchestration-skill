@@ -7,7 +7,7 @@
   },
   "codex": {
     "ignore_pace": true,
-    "prefer": true,
+    "prefer": false,
     "allow_credits": true,
     "reserve_percent": 0
   },

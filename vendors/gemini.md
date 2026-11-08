@@ -128,5 +128,5 @@ Permission rule semantics: [official CLI permissions](https://antigravity.google
 ## Quota
 
 `scripts/usage` reads it with `agy -p /usage`, which spends no quota (`USAGE.md`). Gemini's level
-comes from the "Gemini Models" group; Argon has its own weekly bucket on Pro plans, reported as a
+comes from the weekly "Gemini Models" quota; Argon has its own weekly bucket on Pro plans, reported as a
 note.
