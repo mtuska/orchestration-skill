@@ -173,6 +173,84 @@ class ClaudeScopeTests(unittest.TestCase):
         self.assertEqual(r['windows'][1]['level'], 'red')
 
 
+class CreditReaderTests(unittest.TestCase):
+    def test_claude_allowance_is_not_prepaid_balance(self):
+        extra = {'is_enabled': True, 'monthly_limit': 10000, 'used_credits': 5499,
+                 'currency': 'USD', 'decimal_places': 2}
+        cr = u.claude_credits({'extra_usage': extra})
+        self.assertIsNone(cr['balance'])
+        self.assertEqual(cr['available'], 45.01)
+        self.assertTrue(cr['has_credits'])
+        for change in [{'is_enabled': False}, {'disabled_reason': 'out_of_credits'},
+                       {'spend_limit_reached': True}, {'used_credits': 10000}]:
+            self.assertFalse(u.claude_credits({'extra_usage': {**extra, **change}})['has_credits'])
+        self.assertIsNone(u.claude_credits({'extra_usage': {'is_enabled': True}})['available'])
+        cr = u.claude_credits({'extra_usage': extra, 'spend': {
+            'balance': {'amount_minor': 1000, 'exponent': 2}}})
+        self.assertEqual(cr['available'], 10)
+
+    def test_cursor_balance_and_credit_routing(self):
+        for raw, balance in [({'val': 12.5}, 12.5), ({'val': 0}, 0),
+                             (None, None), ({'val': 'NaN'}, None), ({'val': True}, None)]:
+            with patch.object(u, 'grok_billing', return_value={'config': {
+                    'creditUsagePercent': 100, 'prepaidBalance': raw}}):
+                d = u.read_cursor(False)
+            self.assertEqual(d['credits']['balance'], balance)
+            self.assertEqual(u.fallback_capacity(d), 'credits' if balance else None)
+            u.apply_policy({'cursor': d}, {'cursor': {'allow_credits': True}})
+            self.assertEqual(d['routing_level'], 'green' if balance else 'red')
+
+    def test_claude_exhausted_quota_can_use_allowance(self):
+        cr = u.claude_credits({'extra_usage': {'is_enabled': True, 'monthly_limit': 500,
+                            'used_credits': 100, 'decimal_places': 2}})
+        d = {'vendor': 'claude', 'status': 'ok', 'windows': [{'percent': 100}], 'credits': cr}
+        self.assertEqual(u.fallback_capacity(d), 'credits')
+        cr['has_credits'] = False
+        self.assertIsNone(u.fallback_capacity(d))
+
+
+class MinimumPreferenceTests(unittest.TestCase):
+    def vendor(self, used, level='red', credits=0, **extra):
+        return {'status': 'ok', 'level': level, 'windows': [{'percent': used}],
+                'credits': {'balance': credits}, 'spend_control_reached': False, **extra}
+
+    def test_pace_red_remaining_quota_fills_second_slot(self):
+        vendors = {'cursor': self.vendor(10, 'green'), 'claude': self.vendor(70)}
+        self.assertEqual(u.advise(vendors)['prefer'], 'cursor+claude')
+
+    def test_credit_fallback_works_without_policy_override(self):
+        vendors = {'cursor': self.vendor(10, 'green'),
+                   'codex': self.vendor(100, credits=20, hard_stop=True,
+                                        ordinary_usage_allowed=False, rate_limit_reached_type='rate_limit_reached')}
+        advice = u.advise(vendors)
+        self.assertEqual(advice['prefer'], 'cursor+codex')
+        self.assertIn('existing credits', advice['rule'])
+        self.assertEqual(advice['codex'], 'red')  # Keep measured pace separate from eligibility.
+
+    def test_exhausted_without_credits_is_excluded_even_if_green(self):
+        vendors = {'cursor': self.vendor(10, 'green'), 'codex': self.vendor(100, 'green')}
+        advice = u.advise(vendors)
+        self.assertEqual(advice['prefer'], 'cursor')
+        self.assertIn('cannot provide two', advice['rule'])
+
+    def test_remaining_quota_before_credits_and_reserve_uses_actual(self):
+        vendors = {'cursor': self.vendor(10, 'green'), 'codex': self.vendor(100, credits=20),
+                   'claude': self.vendor(100)}
+        vendors['claude']['windows'][0]['actual_percent'] = 95
+        self.assertEqual(u.advise(vendors)['prefer'], 'cursor+claude')
+
+    def test_all_exhausted_can_use_two_credit_balances(self):
+        vendors = {'codex': self.vendor(100, credits=20), 'gemini': self.vendor(100, credits=10),
+                   'cursor': self.vendor(100)}
+        self.assertEqual(set(u.advise(vendors)['prefer'].split('+')), {'codex', 'gemini'})
+
+    def test_blocks_and_stale_readings_cannot_fill_slots(self):
+        for extra in [{'spend_control_reached': True}, {'status': 'stale'},
+                      {'rate_limit_reached_type': 'unknown_block'}]:
+            vendors = {'cursor': self.vendor(10, 'green'), 'codex': self.vendor(100, credits=20, **extra)}
+            self.assertEqual(u.advise(vendors)['prefer'], 'cursor')
+
+
 class PolicyTests(unittest.TestCase):
     def test_pace_override_and_preference_preserve_measurement(self):
         d = {'status': 'ok', 'level': 'red', 'windows': [u.window('weekly', 'weekly', 80, u.now_utc() + u.dt.timedelta(hours=5), 36000)], 'notes': []}
@@ -266,7 +344,7 @@ class PaceTests(unittest.TestCase):
                 with patch.object(u, 'now_utc', return_value=now):
                     reset = now + u.dt.timedelta(seconds=duration * (1 - elapsed_fraction))
                     w = u.window('quota', 'quota', 0, reset, duration)
-                    self.assertIsNone(w['pace_ratio'])
+                    self.assertEqual(w['pace_ratio'], None if elapsed_fraction == 0 else 0.0)
                     self.assertEqual(u.level_for([w]), 'green')
                     self.assertEqual(u.level_for([w], hard_stop=True), 'red')
                     d = {'status': 'ok', 'windows': [w]}
@@ -274,6 +352,18 @@ class PaceTests(unittest.TestCase):
                     self.assertEqual(d['routing_level'], 'green')
         self.assertIsNone(u.level_for([u.window('quota', 'quota', 0, None, None)]))
         self.assertIsNone(u.level_for([u.window('quota', 'quota', None, now, 3600)]))
+
+    def test_nonzero_early_usage_has_measured_pace(self):
+        now = u.now_utc()
+        with patch.object(u, 'now_utc', return_value=now):
+            for used, expected in [(0.5, 'green'), (0.84, 'yellow'), (1.0, 'red')]:
+                # Only 0.7% of the weekly window has elapsed.
+                reset = now + u.dt.timedelta(seconds=7 * 86400 * 0.993)
+                w = u.window('weekly', 'weekly', used, reset, 7 * 86400)
+                self.assertAlmostEqual(w['pace_ratio'], round(used / 0.7, 2))
+                self.assertEqual(u.level_for([w]), expected)
+            w = u.window('weekly', 'weekly', 1, now + u.dt.timedelta(days=7), 7 * 86400)
+            self.assertIsNone(u.level_for([w]))
 
     def test_levels_follow_pace_not_absolute_usage(self):
         for used, ratio, expected in [(95, 1.0, 'green'), (15, 1.5, 'red'),
@@ -292,6 +382,25 @@ class PaceTests(unittest.TestCase):
 
 
 class GrokBillingTests(unittest.TestCase):
+    def test_zero_omitted_after_unified_billing_reset(self):
+        config = {'isUnifiedBillingUser': True, 'currentPeriod': {
+            'type': 'USAGE_PERIOD_TYPE_WEEKLY', 'start': '2026-11-09T19:19:57Z',
+            'end': '2026-11-16T19:19:57Z'}}
+        with patch.object(u, 'now_utc', return_value=u.parse_ts('2026-11-09T20:00:00Z')):
+            for override, expected in [({}, 'ok'), ({'creditUsagePercent': None}, 'unavailable'),
+                    ({'isUnifiedBillingUser': False}, 'unavailable'),
+                    ({'currentPeriod': {}}, 'unavailable'),
+                    ({'productUsage': [{'usagePercent': 10}]}, 'unavailable')]:
+                with patch.object(u, 'grok_billing', return_value={'config': {**config, **override}}):
+                    r = u.read_cursor()
+                self.assertEqual(r['status'], expected)
+                if expected == 'ok':
+                    self.assertEqual(r['binding']['percent'], 0)
+                    self.assertEqual(r['level'], 'green')
+        with patch.object(u, 'now_utc', return_value=u.parse_ts('2026-11-17T00:00:00Z')), \
+             patch.object(u, 'grok_billing', return_value={'config': config}):
+            self.assertEqual(u.read_cursor()['status'], 'unavailable')
+
     def test_shared_pool_reset_and_pace(self):
         payload = {'config': {'creditUsagePercent': 51,
             'currentPeriod': {'type': 'USAGE_PERIOD_TYPE_WEEKLY',

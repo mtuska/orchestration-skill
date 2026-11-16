@@ -97,9 +97,9 @@ def window(wid, label, percent, resets_at, duration_s, active=None, extra=None):
         frac = min(1.0, max(0.0, frac))
         expected = frac * 100
         w["expected_percent_now"] = round(expected, 1)
-        if float(percent) == 0 and expected < 2:
+        if float(percent) == 0 and expected == 0:
             w["pace"] = "on" if expected == 0 else "behind"
-        if expected >= 2:
+        if expected > 0:
             ratio = float(percent) / expected
             w["pace_ratio"] = round(ratio, 2)
             w["pace"] = "ahead" if ratio > 1.1 else ("behind" if ratio < 0.9 else "on")
@@ -130,7 +130,7 @@ def level_for(windows, hard_stop=False):
     if "yellow" in levels:
         return "yellow"
     if not levels or None in levels:
-        return None  # no reliable pace, including the first 2% of a window
+        return None  # missing timing or nonzero usage at the exact window start
     return "green"
 
 
@@ -167,6 +167,43 @@ def claude_token(allow_refresh):
         except (OSError, subprocess.SubprocessError, KeyError, ValueError) as e:
             return None, creds, f"token expired and refresh failed ({e})"
     return creds.get("accessToken"), creds, refreshed
+
+
+def credit_number(value):
+    """Missing or malformed monetary values are unknown, never zero."""
+    if isinstance(value, dict):
+        value = value.get("val")
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+        return number if math.isfinite(number) and number >= 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def claude_credits(data):
+    extra = data.get("extra_usage") or {}
+    spend = data.get("spend") or {}
+    exponent = extra.get("decimal_places")
+    scale = 10 ** exponent if type(exponent) is int and 0 <= exponent <= 6 else None
+    limit, used = credit_number(extra.get("monthly_limit")), credit_number(extra.get("used_credits"))
+    remaining = max(0, limit - used) / scale if scale and limit is not None and used is not None else None
+    balance = spend.get("balance")
+    prepaid = None
+    if isinstance(balance, dict):
+        amount, exp = credit_number(balance.get("amount_minor")), balance.get("exponent")
+        if amount is not None and type(exp) is int and 0 <= exp <= 6:
+            prepaid = amount / 10 ** exp
+    enabled = (extra.get("is_enabled") is True and not extra.get("disabled_reason")
+               and not extra.get("user_disabled") and not extra.get("spend_limit_reached")
+               and spend.get("enabled") is not False and not spend.get("disabled_reason"))
+    available = remaining
+    if prepaid is not None:
+        available = min(prepaid, remaining) if remaining is not None else prepaid
+    return {"balance": prepaid, "remaining_allowance": remaining,
+            "available": available if enabled else 0, "enabled": enabled,
+            "currency": extra.get("currency"), "has_credits": enabled and available is not None and available > 0}
 
 
 def read_claude(allow_refresh):
@@ -243,6 +280,7 @@ def read_claude(allow_refresh):
     out["extra_usage"] = {"enabled": bool(xu.get("is_enabled")), "utilization": xu.get("utilization"),
                           "monthly_limit": xu.get("monthly_limit"), "used_credits": xu.get("used_credits"),
                           "disabled_reason": xu.get("disabled_reason")}
+    out["credits"] = claude_credits(data)
     out["windows"] = windows
     out["binding"] = binding(shared_windows)
     out["hard_stop"] = hard_stop
@@ -564,11 +602,21 @@ def read_cursor(allow_refresh=True):
             refresh_grok_token()
             data = grok_billing()
         config = data.get("config") or {}
+        balance = credit_number(config.get("prepaidBalance"))
+        out["credits"] = {"balance": balance, "has_credits": balance > 0 if balance is not None else None}
         percent = config.get("creditUsagePercent")
-        if isinstance(percent, bool) or not isinstance(percent, (int, float)) or not math.isfinite(percent) or percent < 0:
-            raise ValueError("shared pool usage is missing or invalid")
         period = config.get("currentPeriod") or {}
         start, end = parse_ts(period.get("start")), parse_ts(period.get("end"))
+        # Observed 2026-11-09: unified billing omits zero-valued usage after reset;
+        # Grok's own /usage displays 0%. Only accept that identifiable empty-period shape.
+        if ("creditUsagePercent" not in config and config.get("isUnifiedBillingUser") is True
+                and period.get("type") == "USAGE_PERIOD_TYPE_WEEKLY"
+                and start and end and start <= now_utc() < end
+                and end - start == dt.timedelta(days=7) and not config.get("productUsage")):
+            percent = 0.0
+            out["notes"].append("Grok omitted zero usage for the active weekly pool")
+        if isinstance(percent, bool) or not isinstance(percent, (int, float)) or not math.isfinite(percent) or percent < 0:
+            raise ValueError("shared pool usage is missing or invalid")
         duration = (end - start).total_seconds() if start and end and end > start else None
         label = "weekly shared Grok/Cursor" if period.get("type") == "USAGE_PERIOD_TYPE_WEEKLY" else "shared Grok/Cursor"
         out["windows"] = [window("shared", label, percent, end, duration,
@@ -648,11 +696,11 @@ def apply_policy(vendors, policy):
         # Ordinary usage is the included allowance, not credit-backed availability.
         included_block = (d.get("rate_limit_reached_type") == "rate_limit_reached"
                           or d.get("ordinary_usage_allowed") is False or exhausted)
-        credit_ready = (name == "codex" and opts["allow_credits"]
-                        and d.get("spend_control_reached") is False
+        credit_ready = (opts["allow_credits"]
+                        and (d.get("spend_control_reached") is False if name == "codex" else not d.get("spend_control_reached"))
                         and d.get("rate_limit_reached_type") in (None, "rate_limit_reached")
                         and credits.get("has_credits") is True
-                        and (credits.get("unlimited") is True or (credits.get("balance") or 0) > 0))
+                        and (credits.get("unlimited") is True or (credits.get("available", credits.get("balance")) or 0) > 0))
         blocked = (d.get("hard_stop") or d.get("spend_control_reached")
                    or d.get("ordinary_usage_allowed") is False or d.get("rate_limit_reached_type"))
         if included_block and credit_ready:
@@ -667,12 +715,35 @@ def apply_policy(vendors, policy):
             d["policy_notes"].append("pace restriction ignored by user policy")
         if opts["allow_credits"]:
             d["policy_notes"].append("existing credits authorized; no purchases, limit increases or reset-credit redemption")
-            if name != "codex":
-                d["policy_notes"].append("automatic credit availability check unsupported for this vendor; quota exhaustion still blocks routing")
 
 
 def routing_level(d):
     return d.get("routing_level", d.get("level"))
+
+
+def fallback_capacity(d):
+    """Fresh, usable allowance first; existing credits second. Never authorize purchases."""
+    if d.get("status") != "ok" or d.get("spend_control_reached"):
+        return None
+    kind = d.get("rate_limit_reached_type")
+    if kind not in (None, "rate_limit_reached"):
+        return None
+    windows = [w for w in d.get("windows", []) if not w.get("bucket")]
+    actual = [w.get("actual_percent", w.get("percent")) for w in windows]
+    exhausted = any(p is not None and p >= 100 for p in actual)
+    included_block = exhausted or kind == "rate_limit_reached" or d.get("ordinary_usage_allowed") is False
+    if d.get("hard_stop") and not included_block:
+        return None
+    if not included_block and actual and all(p is not None and p < 100 for p in actual):
+        return "quota"
+    credits = d.get("credits") or {}
+    if (credits.get("has_credits") is not False
+            and (credits.get("unlimited") is True or (credits.get("available", credits.get("balance")) or 0) > 0)):
+        # Codex reports spending controls separately; require that confirmation.
+        if d.get("vendor") == "codex" and d.get("spend_control_reached") is not False:
+            return None
+        return "credits"
+    return None
 
 
 def advise(vendors):
@@ -712,27 +783,37 @@ def advise_installed(vendors):
                 "green": f"{v} green"}.get(lvl, f"{v} quota unknown: treat as yellow")
         return {v: lvl or "unknown", "prefer": "n/a",
                 "rule": rule + "; run without --vendor for a routing preference", "notes": notes}
-    lv = list(levels.values())
-    best = min(LEVEL_RANK[l] for l in lv)
-    greenest = [v for v, l in levels.items() if LEVEL_RANK[l] == best]
-    if all(l == "red" for l in lv):
-        prefer, rule = "neither", "every vendor red: stop launching new work and tell the user"
-    elif all(l is None for l in lv):
-        prefer, rule = "either", "quota unknown for every vendor: route by fit, say so in the record, and re-run usage before large launches"
-    elif len(greenest) == len(levels):
-        prefer, rule = "either", "choose the least expensive suitable model; green is availability, not a reason to upgrade"
-    else:
-        prefer = "+".join(greenest)
-        names = " or ".join(v.capitalize() for v in greenest)
-        reds = [v for v, l in levels.items() if l == "red"]
-        rule = f"choose the least expensive suitable model; among suitable candidates prefer capacity on {names}"
-        if reds:
-            rule += f"; no new work on {', '.join(reds)}"
-    preferred = [v for v in greenest if vendors[v].get("policy", {}).get("prefer")
-                 and levels[v] == "green" and vendors[v].get("status") == "ok"]
+    capacity = {v: fallback_capacity({**d, "vendor": v}) for v, d in vendors.items()}
+    # Normal routing keeps every equally preferred usable vendor. Pace-red is not exhausted.
+    eligible = [v for v in levels if vendors[v].get("status") == "ok"
+                and (capacity[v] is not None or (levels[v] in ("green", "yellow")
+                     and not vendors[v].get("hard_stop")
+                     and not vendors[v].get("spend_control_reached")
+                     and not any((w.get("actual_percent", w.get("percent")) or 0) >= 100
+                                 for w in vendors[v].get("windows", []) if not w.get("bucket"))))]
+    normal = [v for v in eligible if levels[v] in ("green", "yellow")]
+    best = min((LEVEL_RANK[levels[v]] for v in normal), default=None)
+    selected = [v for v in normal if LEVEL_RANK[levels[v]] == best]
+    fallbacks = sorted((v for v in eligible if v not in selected),
+                       key=lambda v: (capacity[v] == "credits", LEVEL_RANK[levels[v]]))
+    added = fallbacks[:max(0, 2 - len(selected))]
+    selected += added
+    prefer = "+".join(selected) or "neither"
+    rule = "choose the least expensive suitable model among the listed vendors"
+    if added:
+        rule += "; minimum-two fallback: " + ", ".join(
+            v + (" using existing credits" if capacity[v] == "credits" else " using remaining weekly allowance despite pace")
+            for v in added)
+    if any(capacity[v] == "credits" for v in selected):
+        rule += "; existing credits acceptable; no purchases, limit increases or reset-credit redemption"
+    if len(selected) < 2:
+        rule += f"; only {len(selected)} usable vendor(s) confirmed; cannot provide two"
+    excluded = [v for v in levels if v not in eligible]
+    if excluded:
+        rule += "; unavailable or unconfirmed: " + ", ".join(excluded)
+    preferred = [v for v in selected if vendors[v].get("policy", {}).get("prefer")]
     if preferred:
-        prefer = "+".join(greenest)
-        rule += "; user policy favors " + "+".join(preferred) + " among suitable choices; other listed vendors remain eligible"
+        rule += "; user policy favors " + "+".join(preferred) + " among suitable choices"
     res = {v: (l or "unknown") for v, l in levels.items()}
     res.update({"prefer": prefer, "policy_preferred": preferred, "rule": rule, "notes": notes})
     return res
@@ -767,6 +848,12 @@ def text_report(snap):
             lines.append(f"   on-demand              ${od['used']:g} / ${od['limit']:g}")
         if d.get("credits") and d["credits"].get("balance") is not None:
             lines.append(f"   credits balance        {d['credits']['balance']:.2f}")
+        if d.get("credits"):
+            cr = d["credits"]
+            if cr.get("balance") is None:
+                lines.append("   credits balance        unknown")
+            if cr.get("remaining_allowance") is not None:
+                lines.append(f"   extra-usage allowance  {cr['remaining_allowance']:.2f} {cr.get('currency') or ''} remaining; {'enabled' if cr.get('enabled') else 'disabled'}")
         rc = d.get("reset_credits")
         if rc and rc.get("available"):
             lines.append(f"   free limit resets      {rc['available']} available (next expires {rc['next_expires_at']})")

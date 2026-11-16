@@ -6,10 +6,10 @@
     "reserve_percent": 10
   },
   "codex": {
-    "ignore_pace": true,
+    "ignore_pace": false,
     "prefer": false,
-    "allow_credits": true,
-    "reserve_percent": 0
+    "allow_credits": false,
+    "reserve_percent": 5
   },
   "gemini": {
     "ignore_pace": false,
@@ -21,6 +21,6 @@
     "ignore_pace": false,
     "prefer": false,
     "allow_credits": false,
-    "reserve_percent": 0
+    "reserve_percent": 10
   }
 }

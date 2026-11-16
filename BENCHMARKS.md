@@ -1,6 +1,6 @@
 # Model benchmarks
 
-Updated 2026-11-06. Compare within the same source, benchmark version and effort level.
+Updated 2026-11-09; source dates below. Compare within the same source, benchmark version and effort level.
 Scores guide model selection; they do not prove local task success. Repeated results across
 sources are not independent evidence. `—` means unavailable or unverified in this snapshot.
 
@@ -12,7 +12,7 @@ Ranks are overall / coding / agentic (lower is better); benchmark scores are hig
 
 | Model | Ranks | Terminal-Bench 4.0 | DeepSWE | FrontierSWE v2 |
 |---|---|---|---|---|
-| Claude Fable 5.1 | 7 / 4 / 2 | 55.8 | 67.4 | 56.3 |
+| Claude Fable 5.2 | — / 1 / 1 | 67.6 | 74.3 | 69.9 |
 | Claude Opus 5.5 | 2 / 1 / 1 | 66.4 | 74.2 | 62.3 |
 | Claude Sonnet 5.5 | 6 / 2 / 12 | 70.6 | 71.0 | 61.9 |
 | Claude Haiku 5.5 | 24 / 40 / 22 | 39.2 | — | 43.8 |
@@ -27,19 +27,23 @@ Ranks are overall / coding / agentic (lower is better); benchmark scores are hig
 | Grok 4.6 | 22 / 21 / 10 | — | 65.9 | 25.3 |
 | Composer 2.5 | — | — | — | — |
 
+[Fable 5.2](https://benchlm.ai/models/claude-fable-5-2) refreshed 2026-11-09; its ranks use a newer
+cohort. Its Terminal-Bench/DeepSWE scores are provider-reported; FrontierSWE links to the evaluator.
+
 *Agentic rank estimated. The 6.1 models were not verified in this BenchLM snapshot.
 Flash and Grok scores vary sharply by benchmark; do not select them on DeepSWE alone.
 
 ## Artificial Analysis
 
-[Leaderboard](https://artificialanalysis.ai/leaderboards/models), fetched 2026-11-06.
+[Leaderboard](https://artificialanalysis.ai/leaderboards/models): Fable 5.2 refreshed 2026-11-09;
+other rows fetched 2026-11-06.
 Intelligence Index v5.0.1 (higher is better); cost/time are per AA index task, not our jobs.
 Medium effort where listed; otherwise high. Effort differs across rows—this is not a controlled
 same-effort comparison. GPT-6 Sol, Grok 4.6 and Composer 2.5 were not in the fetched table.
 
 | Model | Effort | Intelligence Index | Cost/task | Time/task |
 |---|---|---|---|---|
-| Claude Fable 5.1 | medium | 43 | $5.56 | 9.5 min |
+| Claude Fable 5.2 | medium | 56 | $3.80 | 8.3 min |
 | Claude Opus 5.5 | medium | 48 | $2.45 | 6.8 min |
 | Claude Sonnet 5.5 | medium | 31 | $0.78 | 3.6 min |
 | Claude Haiku 5.5 | medium | 25 | $0.09 | 4.1 min |
@@ -56,7 +60,8 @@ same-effort comparison. GPT-6 Sol, Grok 4.6 and Composer 2.5 were not in the fet
 [Leaderboard](https://deepswe.datacurve.ai/), fetched 2026-11-06; page dated 2026-09-22.
 All 21 entries in the fetched view, with exact model labels. 113 tasks, mini-swe-agent harness.
 The v1/v1.1 selection and confidence level of ± values were not resolved. Older labels are not
-substitutes for current revisions; Sol/Terra 6.1 were not present. Listing does not imply CLI availability.
+substitutes for current revisions; Sol/Terra 6.1 were not present. Fable 5.2 remains absent as of
+2026-11-09. Listing does not imply CLI availability.
 
 | Model as published | Effort | Score | Cost/task |
 |---|---|---|---|
@@ -85,49 +90,49 @@ substitutes for current revisions; Sol/Terra 6.1 were not present. Listing does 
 ## Epoch AI
 
 [Epoch Capabilities Index](https://epoch.ai/eci) · [score CSV](https://epoch.ai/data/eci_scores.csv),
-retrieved 2026-11-06. General capability composite; higher is better. Intervals are Epoch's
+retrieved 2026-11-09. General capability composite; higher is better. Intervals are Epoch's
 reported credible bounds; effort is not specified in this export. Overlapping intervals do not
 establish a clear ranking. Credit: Epoch AI, CC BY 4.0. Composer 2.5 was absent from the export.
 
 | Model | ECI | Credible interval |
 |---|---|---|
-| GPT-6 Astra | 169.07 | 166.16–172.28 |
-| GPT-6.1 Sol | 168.94 | 165.97–172.19 |
-| Claude Opus 5.5 | 168.36 | 165.54–171.51 |
-| GPT-6.1 Terra | 167.82 | 164.88–171.17 |
-| Claude Fable 5.1 | 166.90 | 164.27–169.85 |
-| Gemini 4 Argon | 166.45 | 163.83–169.38 |
-| Claude Sonnet 5.5 | 166.24 | 163.52–169.23 |
-| GPT-6 Sol | 164.06 | 161.58–166.80 |
-| Claude Haiku 5.5 | 160.22 | 158.04–162.57 |
-| Gemini 3.8 Flash | 158.63 | 156.65–160.79 |
-| Grok 4.6 | 157.92 | 155.99–160.09 |
-| GPT-6 Luna | 156.68 | 154.78–158.74 |
-| Grok 4.7 | 156.07 | 154.20–158.03 |
+| Claude Fable 5.2 | 174.24 | 170.12–178.79 |
+| GPT-6 Astra | 169.16 | 166.19–172.51 |
+| GPT-6.1 Sol | 168.87 | 165.90–172.24 |
+| Claude Opus 5.5 | 168.67 | 165.78–171.91 |
+| GPT-6.1 Terra | 168.11 | 165.09–171.50 |
+| Gemini 4 Argon | 166.53 | 163.88–169.53 |
+| Claude Sonnet 5.5 | 166.32 | 163.65–169.35 |
+| GPT-6 Sol | 164.00 | 161.51–166.81 |
+| Claude Haiku 5.5 | 160.25 | 158.02–162.73 |
+| Gemini 3.8 Flash | 158.66 | 156.59–160.92 |
+| Grok 4.6 | 157.91 | 155.87–160.12 |
+| GPT-6 Luna | 156.50 | 154.60–158.57 |
+| Grok 4.7 | 156.05 | 154.15–158.13 |
 
 ## LLM Stats
 
 [Leaderboard](https://llm-stats.com/) · [methodology v3.1](https://llm-stats.com/methodology/llm-stats-score),
-retrieved 2026-11-06. Conservative composite ratings (higher is better, not percentages).
+retrieved 2026-11-09. Conservative composite ratings (higher is better, not percentages).
 Category indexes use different benchmark subsets; effort is unspecified in this export.
 Evidence mixes lab-reported, third-party and verified results; overlap with other sources is
 not independent confirmation. Composer 2.5 was absent from the fetched data.
 
 | Model | LLM Stats | Reasoning | Coding | Agent |
 |---|---|---|---|---|
-| Claude Fable 5.1 | 52.8 | 50.1 | 35.7 | 38.3 |
-| Claude Opus 5.5 | 59.9 | 58.5 | 51.0 | 45.7 |
-| Claude Sonnet 5.5 | 57.9 | 56.0 | 48.7 | 43.5 |
-| Claude Haiku 5.5 | 49.4 | 46.5 | 39.3 | 33.8 |
-| GPT-6 Astra | 57.3 | 55.7 | 46.7 | 44.3 |
-| GPT-6 Sol | 47.5 | 44.2 | 34.0 | 35.0 |
-| GPT-6.1 Sol | 53.4 | 50.7 | 39.6 | 38.1 |
-| GPT-6.1 Terra | 47.6 | 49.1 | 37.3 | 38.7 |
-| GPT-6 Luna | 43.1 | 39.2 | 29.7 | 30.4 |
-| Gemini 4 Argon | 54.4 | 51.9 | 43.4 | 41.3 |
-| Gemini 3.8 Flash | 48.9 | 46.0 | 34.9 | 34.2 |
-| Grok 4.7 | 46.2 | 41.8 | 35.6 | 33.7 |
-| Grok 4.6 | 44.3 | 46.0 | 33.4 | 34.1 |
+| Claude Fable 5.2 | 61.6 | 60.8 | 51.5 | 47.5 |
+| Claude Opus 5.5 | 59.2 | 57.9 | 49.2 | 44.8 |
+| Claude Sonnet 5.5 | 57.6 | 55.9 | 47.3 | 42.9 |
+| Claude Haiku 5.5 | 49.0 | 46.2 | 38.5 | 33.1 |
+| GPT-6 Astra | 57.0 | 55.6 | 45.5 | 43.5 |
+| GPT-6 Sol | 47.2 | 44.0 | 33.3 | 34.5 |
+| GPT-6.1 Sol | 53.2 | 50.4 | 39.0 | 37.7 |
+| GPT-6.1 Terra | 47.3 | 48.6 | 36.4 | 38.0 |
+| GPT-6 Luna | 42.9 | 39.1 | 29.0 | 29.9 |
+| Gemini 4 Argon | 54.0 | 51.5 | 42.6 | 40.7 |
+| Gemini 3.8 Flash | 48.7 | 45.8 | 34.4 | 33.6 |
+| Grok 4.7 | 45.9 | 41.6 | 34.9 | 33.1 |
+| Grok 4.6 | 44.3 | 46.3 | 32.6 | 34.0 |
 | Composer 2.5 | — | — | — | — |
 
 Keep this file to one table per source. Add models to the relevant table, retain dates and effort,
